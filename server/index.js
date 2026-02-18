@@ -121,7 +121,14 @@ function applyAction(state, type, payload){
 }
 
 io.on('connection', (socket) => {
-  const { room, player } = socket.handshake.query || {};
+  const q = socket.handshake.query || {};
+  const a = socket.handshake.auth || {};
+
+  const room = String(q.room || a.room || '').trim().toUpperCase();
+  const player = String(q.player || a.player || '0');
+
+  const playerIndex = Math.max(0, parseInt(player, 10) || 0);
+
   const roomCode = String(room || '').trim().toUpperCase();
   const playerIndex = Math.max(0, parseInt(String(player || '0'), 10) || 0);
 
