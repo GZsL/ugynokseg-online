@@ -10,27 +10,20 @@ app.use(express.json({ limit: '1mb' }));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 app.use(express.static(PUBLIC_DIR));
 
-// Root -> setup oldal
-app.get('/', (req, res) => {
-  res.sendFile(path.join(PUBLIC_DIR, 'setup.html'));
-});
-
-
-// ---------------- ROOM STORE ----------------
+// ---- In-memory room store (LAN test) ----
+/** @type {Map<string, { state:any, createdAt:number }>} */
 const rooms = new Map();
 
-function makeRoomCode(len = 4) {
+function makeRoomCode(len = 4){
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let out = '';
-  for (let i = 0; i < len; i++) {
-    out += alphabet[Math.floor(Math.random() * alphabet.length)];
-  }
+  for(let i=0;i<len;i++) out += alphabet[Math.floor(Math.random()*alphabet.length)];
   return out;
 }
 
-function createRoom(configs) {
+function createRoom(configs){
   let code;
-  do { code = makeRoomCode(); } while (rooms.has(code));
+  do{ code = makeRoomCode(4); }while(rooms.has(code));
 
   let state = Engine.createGame(configs);
   state = Engine.startTurn(state).next;
@@ -39,159 +32,146 @@ function createRoom(configs) {
   return code;
 }
 
-
-// ---------------- CREATE ROOM API ----------------
+// Create a new room from Setup page
 app.post('/api/create-room', (req, res) => {
-  try {
-    const configs = req.body?.configs;
-
-    if (!Array.isArray(configs) || configs.length < 2 || configs.length > 4) {
+  try{
+    const configs = (req.body && req.body.configs) ? req.body.configs : null;
+    if(!Array.isArray(configs) || configs.length < 2 || configs.length > 4){
       return res.status(400).json({ error: '2–4 játékos szükséges.' });
     }
-
-    for (const c of configs) {
-      if (!c?.name?.trim()) {
+    for(const c of configs){
+      if(!c || typeof c.name !== 'string' || !c.name.trim()){
         return res.status(400).json({ error: 'Minden játékosnak legyen neve.' });
       }
-      if (!c.characterKey) {
+      if(!c.characterKey){
         return res.status(400).json({ error: 'Minden játékosnak válassz karaktert.' });
       }
     }
-
-    const room = createRoom(
-      configs.map(c => ({
-        name: c.name.trim(),
-        characterKey: c.characterKey
-      }))
-    );
-
-    res.json({ room });
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Szerver hiba.' });
+    const room = createRoom(configs.map(c=>({ name: c.name.trim(), characterKey: c.characterKey })));
+    return res.json({ room });
+  }catch(e){
+    console.error(e);
+    return res.status(500).json({ error: 'Szerver hiba a szoba létrehozásakor.' });
   }
 });
 
-
-// ---------------- SOCKET SERVER ----------------
 const server = http.createServer(app);
-
 const io = new Server(server, {
-  cors: { origin: true }
+  cors: { origin: true, methods: ['GET','POST'] }
 });
 
-function getRoom(code) {
-  return rooms.get(code)?.state || null;
-}
-
-function setRoomState(code, state) {
+function getRoom(code){
   const r = rooms.get(code);
-  if (r) r.state = state;
+  return r ? r.state : null;
+}
+function setRoomState(code, state){
+  const r = rooms.get(code);
+  if(!r) return;
+  r.state = state;
 }
 
-function broadcastState(code) {
+function broadcastState(code){
   const state = getRoom(code);
-  if (state) {
-    io.to(code).emit('state', state);
+  if(!state) return;
+  io.to(code).emit('state', state);
+}
+
+function isActionAllowed(state, playerIndex, type){
+  if(!state || !state.players) return false;
+
+  // During elimination pause, only the eliminated player may ACK
+  if(state.turn && state.turn.phase === 'ELIMINATION_PAUSE'){
+    if(type !== 'ACK_ELIMINATION') return false;
+    const last = state._lastEliminated;
+    const p = state.players[playerIndex];
+    return !!(last && p && p.id === last.id);
+  }
+
+  // Game over: no actions
+  if(state.turn && state.turn.phase === 'GAME_OVER') return false;
+
+  // Normal: only current player can act
+  return playerIndex === (state.currentPlayerIndex || 0);
+}
+
+function applyAction(state, type, payload){
+  payload = payload || {};
+  switch(type){
+    case 'PRE_DRAW':
+      return Engine.doPreDraw(state);
+    case 'ROLL':
+      return Engine.doRollAndDraw(state);
+    case 'ATTEMPT_CASE':
+      return Engine.attemptCase(state, payload);
+    case 'PROFILER_PEEK':
+      return Engine.profilerPeek(state, { keep: payload.keep });
+    case 'PASS':
+      return Engine.beginPassToEndTurn(state);
+    case 'END_TURN':
+      return Engine.endTurn(state, Array.isArray(payload.discardIds) ? payload.discardIds : []);
+    case 'ACK_ELIMINATION':
+      return Engine.ackElimination(state);
+    default:
+      return { next: state, log: 'Ismeretlen akció.' };
   }
 }
 
-function isActionAllowed(state, playerIndex) {
-  if (!state?.players) return false;
-  if (state.turn?.phase === 'GAME_OVER') return false;
-  return playerIndex === state.currentPlayerIndex;
-}
-
-
-// ---------------- CONNECTION ----------------
 io.on('connection', (socket) => {
+  const { room, player } = socket.handshake.query || {};
+  const roomCode = String(room || '').trim().toUpperCase();
+  const playerIndex = Math.max(0, parseInt(String(player || '0'), 10) || 0);
 
-  const q = socket.handshake.query || {};
-  const roomCode = String(q.room || '').trim().toUpperCase();
-  const playerIndex = parseInt(q.player, 10);
-
-  if (!roomCode || !rooms.has(roomCode)) {
-    socket.emit('serverMsg', 'Szoba nem található.');
-    return socket.disconnect(true);
+  if(!roomCode || !rooms.has(roomCode)){
+    socket.emit('serverMsg', 'Szoba nem található. Indíts új játékot a setup oldalon.');
+    socket.disconnect(true);
+    return;
   }
 
   const state = getRoom(roomCode);
-
-  if (
-    isNaN(playerIndex) ||
-    playerIndex < 0 ||
-    playerIndex >= state.players.length
-  ) {
-    socket.emit('serverMsg', 'Érvénytelen játékos index.');
-    return socket.disconnect(true);
+  if(!state || !state.players || playerIndex >= state.players.length){
+    socket.emit('serverMsg', 'Érvénytelen játékos index ehhez a szobához.');
+    socket.disconnect(true);
+    return;
   }
 
   socket.join(roomCode);
   socket.data.roomCode = roomCode;
   socket.data.playerIndex = playerIndex;
 
+  // Send current state
   socket.emit('state', state);
 
-
   socket.on('action', (msg) => {
-    try {
+    try{
       const code = socket.data.roomCode;
       const idx = socket.data.playerIndex;
-      const current = getRoom(code);
-      if (!current) return;
+      const s0 = getRoom(code);
+      if(!s0) return;
 
-      if (!isActionAllowed(current, idx)) {
-        return socket.emit('serverMsg', 'Nem te vagy soron.');
+      const type = msg && msg.type ? String(msg.type) : '';
+      const payload = msg && msg.payload ? msg.payload : {};
+
+      if(!isActionAllowed(s0, idx, type)){
+        socket.emit('serverMsg', 'Most nem te vagy soron.');
+        return;
       }
 
-      const type = msg?.type;
-      const payload = msg?.payload || {};
-
-      let result;
-
-      switch (type) {
-        case 'PRE_DRAW':
-          result = Engine.doPreDraw(current);
-          break;
-        case 'ROLL':
-          result = Engine.doRollAndDraw(current);
-          break;
-        case 'ATTEMPT_CASE':
-          result = Engine.attemptCase(current, payload);
-          break;
-        case 'PASS':
-          result = Engine.beginPassToEndTurn(current);
-          break;
-        case 'END_TURN':
-          result = Engine.endTurn(current, payload.discardIds || []);
-          break;
-        default:
-          return;
-      }
-
-      const next = result?.next || current;
-
+      const res = applyAction(s0, type, payload);
+      const next = res && res.next ? res.next : s0;
       setRoomState(code, next);
-
-      if (result?.log) {
-        io.to(code).emit('serverMsg', result.log);
+      if(res && res.log){
+        io.to(code).emit('serverMsg', res.log);
       }
-
       broadcastState(code);
 
-    } catch (err) {
-      console.error(err);
-      socket.emit('serverMsg', 'Szerver hiba.');
+    }catch(e){
+      console.error(e);
+      socket.emit('serverMsg', 'Szerver hiba az akció feldolgozásakor.');
     }
   });
 });
 
-
-// ---------------- START SERVER ----------------
 const PORT = process.env.PORT || 3000;
-
 server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`LAN server running: http://localhost:${PORT}`);
 });
-
