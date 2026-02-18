@@ -10,6 +10,11 @@ app.use(express.json({ limit: '1mb' }));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 app.use(express.static(PUBLIC_DIR));
 
+app.get('/', (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'setup.html'));
+});
+
+
 // ---- In-memory room store (LAN test) ----
 /** @type {Map<string, { state:any, createdAt:number }>} */
 const rooms = new Map();
