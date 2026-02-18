@@ -156,9 +156,16 @@ io.on('connection', (socket) => {
         return;
       }
 
-      const res = applyAction(s0, type, payload);
-      const next = res && res.next ? res.next : s0;
-      setRoomState(code, next);
+	const res = applyAction(s0, type, payload);
+	let next = res && res.next ? res.next : s0;
+
+// ✅ Online: ugyanúgy fusson le az auto-capture, mint offline-ban
+if (Engine && typeof Engine.captureIfPossible === "function") {
+  next = Engine.captureIfPossible(next);
+}
+
+setRoomState(code, next);
+
       if(res && res.log){
         io.to(code).emit('serverMsg', res.log);
       }
