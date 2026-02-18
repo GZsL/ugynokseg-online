@@ -14,7 +14,6 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'setup.html'));
 });
 
-
 // ---- In-memory room store (LAN test) ----
 /** @type {Map<string, { state:any, createdAt:number }>} */
 const rooms = new Map();
@@ -162,7 +161,10 @@ io.on('connection', (socket) => {
       }
 
       const res = applyAction(s0, type, payload);
-      const next = res && res.next ? res.next : s0;
+      let next = res && res.next ? res.next : s0;
+      if(Engine.captureIfPossible){
+        try{ next = Engine.captureIfPossible(next); }catch(e){}
+      }
       setRoomState(code, next);
       if(res && res.log){
         io.to(code).emit('serverMsg', res.log);

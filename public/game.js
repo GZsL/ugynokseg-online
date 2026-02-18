@@ -28,35 +28,63 @@ function escapeHtml(str){
     .replace(/'/g,'&#039;');
 }
 
-let state = null;
+let state = loadState();
 
-// ================= Online (LAN) sync =================
-const QS = new URLSearchParams(window.location.search);
-const ROOM_CODE = QS.get("room") || "";
-const PLAYER_INDEX = parseInt(QS.get("player") || "0", 10) || 0;
+// ================= Online (LAN/Render) sync =================
+const params = new URLSearchParams(location.search);
+const ROOM = (params.get('room') || '').toUpperCase();
+const PLAYER_INDEX = parseInt(params.get('player') || '0', 10) || 0;
+const IS_ONLINE = !!ROOM; // if room param exists, we expect socket server
 
 let socket = null;
-let isOnline = !!ROOM_CODE;
-
 function sendAction(type, payload){
   if(!socket) return;
-  socket.emit("action", { type, payload: payload || {} });
+  socket.emit('action', { type, payload: payload || {} });
 }
 
-function connectOnline(){
-  if(!isOnline) return;
-  socket = io({ query: { room: ROOM_CODE, player: String(PLAYER_INDEX) } });
-  socket.on("state", (nextState)=>{
-    state = nextState;
-    render();
-  });
-  socket.on("serverMsg", (msg)=>{
-    if(msg) setStatus(String(msg));
-    render();
-  });
+function attachSocket(){
+  if(!IS_ONLINE) return;
+  // socket.io client is loaded in online game.html (Render/LAN build)
+  if(typeof io === 'function'){
+    socket = io({ query: { room: ROOM, player: String(PLAYER_INDEX) } });
+    socket.on('state', (s) => {
+      state = s;
+      try{ saveState(state); }catch(e){}
+      render();
+    });
+    socket.on('serverMsg', (t) => toast(String(t)));
+  }else{
+    toast('Hiányzik a socket.io kliens. Online módban a game.html-nek be kell húznia: /socket.io/socket.io.js');
+  }
+}
+// ============================================================
+// If no saved game yet, create a minimal placeholder state so the UI renders.
+if(!state || !state.players){
+  state = window.Engine && window.Engine.createGame ? window.Engine.createGame([{name:"Ügynök 1", characterKey:"DAREDEVIL"}]) : {
+    players:[{name:"Ügynök 1", characterKey:"DAREDEVIL", agentLevel:11, tableCards:[], fixedItems:[], solvedCases:[], capturedThieves:[]}],
+    currentPlayerIndex:0,
+    mixedDeck:[], itemDeck:[], skillDeck:[], discard:[],
+    turn:{phase:"AWAIT_DRAW", diceFaces:[], investigationsLeft:0, skillPlaysLeft:0}
+  };
 }
 
-connectOnline();
+
+
+// Auto pre-draw 3 mixed cards at the start of the turn (same as fix24 UX)
+try{
+  if(window.Engine && window.Engine.doPreDraw && state && state.turn && state.turn.phase==="AWAIT_DRAW"){
+    const p0 = state.players && state.players[state.currentPlayerIndex||0];
+    const hasAny = p0 && Array.isArray(p0.tableCards) && p0.tableCards.length>0;
+    if(!hasAny){
+      const res = window.Engine.doPreDraw(state);
+      state = res.next;
+      saveState(state);
+    }
+  }
+}catch(e){
+  console.warn("auto doPreDraw failed", e);
+}
+
 
 // UI state (selection / discard). Kept separate from game state.
 const ui = {
@@ -81,6 +109,11 @@ function setStatus(msg){
 
 function commit(next){
   state = next;
+  // Auto-capture any revealed thief currently on table (fix24 rule helper)
+  if(window.Engine && typeof window.Engine.captureIfPossible === "function"){
+    state = window.Engine.captureIfPossible(state);
+  }
+  saveState(state);
   render();
 }
 
@@ -199,7 +232,8 @@ function renderDecks(){
         <div style="font-size:68px; font-weight:900; color:var(--theme-color); line-height:1; margin-top:0;">${(state.mixedDeck?.length ?? 0) || 39}</div>
       </div>`;
     mixed.querySelector("#draw3").onclick = ()=>{
-      sendAction("PRE_DRAW");
+      const r = window.Engine.doPreDraw(state);
+      commit(r.next);
 };
 
     const peekBtn = mixed.querySelector('#profilerPeekBtn');
@@ -264,7 +298,657 @@ function renderRoll(){
   `;
 
   roll.querySelector("#rollBtn").onclick = ()=>{
-    sendAction('ROLL'); resetUseSelections();
+    const r = window.Engine.doRollAndDraw(state);
+    commit(r.next);
+  };
+
+  const hb = roll.querySelector("#helpBtnRoll");
+  if(hb){ hb.onclick = ()=>showHelpModal(); }
+}
+
+function renderCase(){
+  const box = document.getElementById("case");
+  if(!box) return;
+  const p = activePlayer();
+  const cases = (p.tableCards||[]).filter(c=>c.kind==="case");
+
+  // Auto-select first case if none selected
+  if(!ui.selectedCaseId && cases.length){
+    ui.selectedCaseId = cases[0].id;
+  }
+
+  const selected = cases.find(c=>c.id===ui.selectedCaseId) || null;
+
+  const reqItems = (selected && selected.requiredItems) ? selected.requiredItems : [];
+  const reqItemsTxt = reqItems.length ? reqItems.join(", ") : "—";
+  const reqLevel = selected ? (selected.requiredAgentLevel!=null ? selected.requiredAgentLevel : "—") : "—";
+
+  const onFail = selected ? (selected.onFailDelta!=null ? selected.onFailDelta : 0) : 0;
+  const onSucc = selected ? (selected.onSuccessDelta!=null ? selected.onSuccessDelta : 0) : 0;
+
+  const themeHex = THEME_COLORS[p.characterKey] || "#f8bd01";
+
+  const canAttempt = state.turn && state.turn.phase==="AFTER_ROLL" && state.turn.investigationsLeft>0 && !!selected;
+  const canPartner = !!selected && (state.players||[]).length>1 && !p.partnerCallUsed;
+  if(p.partnerCallUsed) ui.selectedPartnerId = null;
+  const selectedPartner = ui.selectedPartnerId ? (state.players||[]).find(x=>x && x.id===ui.selectedPartnerId) : null;
+  const hasPartner = !!selectedPartner;
+  const partnerName = selectedPartner ? selectedPartner.name : "";
+
+  box.innerHTML = `
+    <div style="font-weight:900; letter-spacing:.06em; text-transform:uppercase; margin-bottom:12px;">KIVÁLASZTOTT ÜGY</div>
+    <div style="background:#fff; border-radius:12px; padding:14px; box-sizing:border-box; display:flex; flex-direction:column; justify-content:space-between; flex:1;">
+      <div>
+        <div style="font-weight:900; margin-bottom:10px; color:var(--theme-color);">${selected ? (selected.title||"Ügy") : "—"}</div>
+        <div style="font-size:12px; color:#333; line-height:1.35;">
+          ${selected ? (selected.funnyDesc||selected.desc||"(nincs leírás)") : "Válassz egy ügyet az ÜGYEK oszlopból."}
+        </div>
+
+        <div style="margin-top:10px; font-size:11px; color:#111; font-weight:900;">KÖVETELMÉNYEK</div>
+        <div style="margin-top:8px; display:flex; gap:10px; font-size:11px;">
+          <div style="flex:1; background:#f2f2f2; border-radius:10px; padding:8px;">
+            <div style="font-weight:900; color:#111;">ÜGYNÖKSZINT</div>
+            <div style="margin-top:4px; color:#333;">${reqLevel}</div>
+          </div>
+          <div style="flex:1; background:#f2f2f2; border-radius:10px; padding:8px;">
+            <div style="font-weight:900; color:#111;">TÁRGYAK</div>
+            <div style="margin-top:4px; color:#333;">${reqItemsTxt}</div>
+          </div>
+        </div>
+
+        <div style="margin-top:10px; display:flex; gap:10px; font-size:11px;">
+          <div style="flex:1; background:#f2f2f2; border-radius:10px; padding:8px;">
+            <div style="font-weight:900; color:#111;">SIKER</div>
+            <div style="margin-top:4px; color:#333;">+${onSucc} pont</div>
+          </div>
+          <div style="flex:1; background:#f2f2f2; border-radius:10px; padding:8px;">
+            <div style="font-weight:900; color:#111;">BUKÁS</div>
+            <div style="margin-top:4px; color:#333;">${onFail} pont</div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div style="display:flex; justify-content:space-between; margin:10px 0 6px 0; font-size:11px; font-weight:900; color:#111;">
+          <div>TOLVAJ</div><div>ÁLLAPOT</div>
+        </div>
+        <div style="display:flex; justify-content:space-between; font-size:11px; color:#333;">
+          <div style="opacity:.55;">${selected ? "Ismeretlen" : "—"}</div>
+          <div style="opacity:.55;">${selected ? "még nem derült ki" : ""}</div>
+        </div>
+      </div>
+
+      <div style="display:flex; justify-content:space-between; align-items:flex-end;">
+        <div style="font-weight:900; color:var(--theme-color);">
+          ${selected ? `${(p.agentLevel!=null?p.agentLevel:(p.level||0))}/${reqLevel}` : ""}
+        </div>
+
+        <!-- Buttons: MEGOLDOM always right, TÁRS 10px to the left -->
+        <div class="solveButtonsWrapper" style="display:flex; justify-content:flex-end; align-items:center; gap:10px;">
+          <button class="btn" id="partnerBtn" style="height:40px; padding:0 16px; background:${hexToRgba(themeHex,0.75)}; color:#fff; border:1px solid rgba(255,255,255,.20); ${canPartner ? "" : "opacity:.45; pointer-events:none;"}">TÁRS</button>
+          <button class="btn btn-theme" id="solveBtn" style="height:40px; padding:0 16px; ${canAttempt ? "" : "opacity:.6; pointer-events:none;"}">MEGOLDOM</button>
+        </div>
+      </div>
+
+      <!-- fixed-height line to avoid layout jumping -->
+      <div id="partnerLine" style="margin-top:8px; font-size:13px; font-weight:800; color:#111; min-height:18px; line-height:18px;">${hasPartner ? `Társ: ${partnerName} <span id="clearPartner" style="margin-left:8px; opacity:.8; cursor:pointer;">×</span>` : `<span style="visibility:hidden;">Társ: —</span>`}</div>
+    </div>
+  `;
+
+  const btn = box.querySelector("#solveBtn");
+  if(btn){
+    btn.onclick = ()=>{
+      if(!selected) return;
+      const payload = {
+        caseId: selected.id,
+        usedItemIds: Array.from(ui.usedItemIds),
+        usedSkillIds: Array.from(ui.usedSkillIds),
+        partnerId: hasPartner ? ui.selectedPartnerId : null,
+      };
+      if(IS_ONLINE){ sendAction('ATTEMPT_CASE', payload); return; }
+      const r = window.Engine.attemptCase(state, payload);
+      state = r.next;
+      saveState(state);
+      resetUseSelections();
+      // if selected case was removed, auto-select next
+      const stillCases = (activePlayer().tableCards||[]).filter(c=>c.kind==="case");
+      if(stillCases.length){
+        if(!stillCases.find(c=>c.id===ui.selectedCaseId)) ui.selectedCaseId = stillCases[0].id;
+      } else {
+        ui.selectedCaseId = null;
+      }
+      render();
+      if(r.log) console.log(r.log);
+    };
+  }
+
+const pbtn = box.querySelector("#partnerBtn");
+if(pbtn){
+  pbtn.onclick = ()=>{
+    if(!selected) return;
+    showPartnerModal();
+  };
+}
+const clr = box.querySelector("#clearPartner");
+if(clr){
+  clr.onclick = ()=>{
+    ui.selectedPartnerId = null;
+    render();
+  };
+}
+
+}
+
+
+
+function renderColumns(){
+  const p = activePlayer();
+  const cards = (p.tableCards||[]);
+  const by = (k)=>cards.filter(c=>c.kind===k);
+  const isDiscarding = state.turn && state.turn.phase==="DISCARDING";
+
+  const colCases = document.getElementById("colCases");
+  const colThieves = document.getElementById("colThieves");
+  const colItems = document.getElementById("colItems");
+  const colSkills = document.getElementById("colSkills");
+
+  const renderList = (el, title, items, fmt, emptyHtml, headerColor)=>{
+    if(!el) return;
+    el.innerHTML = `
+      <div style="padding:12px 12px 10px 12px; font-weight:900; letter-spacing:.06em; text-transform:uppercase; color:${headerColor||'inherit'};">${title}</div>
+      <div style="padding:0 12px 12px 12px; display:flex; flex-direction:column; gap:8px;">
+        ${items.length ? items.map(fmt).join("") : emptyHtml}
+      </div>
+    `;
+  };
+
+  const cardSelected = (kind, id)=>{
+    if(isDiscarding) return ui.discardIds.has(id);
+    if(kind==="case") return ui.selectedCaseId===id;
+    if(kind==="item") return ui.usedItemIds.has(id);
+    if(kind==="skill") return ui.usedSkillIds.has(id);
+    return false;
+  };
+
+  const clickableClass = (kind)=> (isDiscarding ? "discardable" : (kind==="thief" ? "" : "clickable"));
+
+  renderList(colCases, "ÜGYEK", by("case"), (c)=>`
+    <div class="miniCard ${clickableClass("case")} ${cardSelected("case",c.id) ? "selected":""}" data-kind="case" data-id="${c.id}" style="background:#fff; color:#111;">
+      <div style="font-weight:900; font-size:12px;">${c.title||"Ügy"}</div>
+    </div>
+  `, `<div class="miniCard" style="background:#fff; color:#111; opacity:.65;">(üres)</div>`);
+
+  renderList(colThieves, "TOLVAJOK", by("thief"), (c)=>`
+    <div class="miniCard ${isDiscarding ? "discardable":""} ${cardSelected("thief",c.id) ? "selected":""}" data-kind="thief" data-id="${c.id}" style="background:rgba(255,255,255,.1); color:#fff; border:1px solid rgba(255,255,255,.25);">
+      <div style="font-weight:900; font-size:12px;">${c.thiefName||c.title||"Tolvaj"}</div>
+    </div>
+  `, `<div class="miniCard" style="background:rgba(255,255,255,.08); color:#fff; border:1px solid rgba(255,255,255,.2); opacity:.65;">(üres)</div>`, "#282828");
+
+  // TÁRGYAK: a fix tárgyak külön listában vannak (p.fixedItems) – megjelenítjük őket is,
+  // de nem kattinthatók / nem dobhatók el (permanent).
+  const fixedItems = (p.fixedItems||[]).map(x=>Object.assign({_fixed:true}, x));
+  const allItems = fixedItems.concat(by("item"));
+
+  renderList(colItems, "TÁRGYAK", allItems, (c)=> c._fixed ? `
+    <div class="miniCard" data-kind="fixedItem" data-id="${c.id}" style="background:rgba(255,255,255,.16); color:#fff; border:1px solid rgba(255,255,255,.28);">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div style="font-weight:900; font-size:12px;">${c.name||"Tárgy"}</div>
+        <div style="font-weight:900; font-size:10px; opacity:.95;">FIX</div>
+      </div>
+      ${c.rarity ? `<div style="font-size:11px; opacity:.85; margin-top:4px;">${c.rarity}</div>`:""}
+    </div>
+  ` : `
+    <div class="miniCard ${clickableClass("item")} ${cardSelected("item",c.id) ? "selected":""}" data-kind="item" data-id="${c.id}" style="background:rgba(255,255,255,.1); color:#fff; border:1px solid rgba(255,255,255,.25);">
+      <div style="font-weight:900; font-size:12px;">${c.name||c.title||"Tárgy"}</div>
+      ${c.rarity ? `<div style="font-size:11px; opacity:.85; margin-top:4px;">${c.rarity}</div>`:""}
+    </div>
+  `, `<div class="miniCard" style="background:rgba(255,255,255,.08); color:#fff; border:1px solid rgba(255,255,255,.2); opacity:.65;">(üres)</div>`, "#282828");
+
+
+  renderList(colSkills, "KÉPESSÉGEK", by("skill"), (c)=>`
+    <div class="miniCard ${clickableClass("skill")} ${cardSelected("skill",c.id) ? "selected":""}" data-kind="skill" data-id="${c.id}" style="background:rgba(255,255,255,.1); color:#fff; border:1px solid rgba(255,255,255,.25); display:flex; justify-content:space-between; align-items:center;">
+      <div style="font-weight:900; font-size:12px;">${c.name||c.title||"Képesség"}</div>
+      <div style="font-weight:900;">${c.bonus!=null ? `+${c.bonus}` : ""}</div>
+    </div>
+  `, `<div class="miniCard" style="background:rgba(255,255,255,.08); color:#fff; border:1px solid rgba(255,255,255,.2); opacity:.65;">(üres)</div>`, "#282828");
+
+  const cardsEls = document.querySelectorAll(".miniCard.clickable, .miniCard.discardable");
+  cardsEls.forEach(el=>{
+    el.onclick = ()=>{
+      const kind = el.getAttribute("data-kind");
+      const id = el.getAttribute("data-id");
+
+      if(isDiscarding){
+        if(kind==="case"){
+          ui.selectedCaseId = id;
+          ui.selectedPartnerId = null;
+        }
+        if(ui.discardIds.has(id)) ui.discardIds.delete(id); else ui.discardIds.add(id);
+        render();
+        return;
+      }
+
+      if(kind==="case"){
+        ui.selectedCaseId = id;
+        resetUseSelections();
+        render();
+        return;
+      }
+      if(kind==="item"){
+        if(ui.usedItemIds.has(id)) ui.usedItemIds.delete(id); else ui.usedItemIds.add(id);
+        render();
+        return;
+      }
+      if(kind==="skill"){
+        if(ui.usedSkillIds.has(id)) ui.usedSkillIds.delete(id); else ui.usedSkillIds.add(id);
+        render();
+        return;
+      }
+    };
+  });
+
+  const hl = document.getElementById("handLimit");
+  if(hl){
+    const lim = (p.handLimit!=null ? p.handLimit : 5);
+    const need = Math.max(0, (p.tableCards||[]).length - lim);
+    const extra = isDiscarding ? ` — dobj el: ${need} (kijelölve: ${ui.discardIds.size})` : "";
+    hl.textContent = `Kézlimit: ${(p.tableCards||[]).length} / ${lim}${extra}`;
+  }
+}
+
+
+function renderSolved(){
+  const box = document.getElementById("solved");
+  if(!box) return;
+  const p = activePlayer();
+  const solved = (p.solvedCases||[]);
+  const captured = new Set((p.capturedThieves||[]).map(t=>t.thiefName));
+  const rows = solved.slice(-8).reverse(); // show latest first
+
+  box.innerHTML = `
+    <div style="font-weight:900; letter-spacing:.06em; text-transform:uppercase; margin-bottom:12px;">MEGOLDOTT ÜGYEK</div>
+    <div style="display:flex; flex-direction:column; gap:10px;">
+      ${rows.length ? rows.map((c)=>{
+        const isCap = !!(c.thiefName && captured.has(c.thiefName));
+        const bg = isCap ? "var(--theme-color)" : "#fff";
+        const titleColor = isCap ? "#fff" : "#282828";
+        const thiefColor = isCap ? "#fff" : "#111";
+        return `
+          <div style="height:34px; border-radius:10px; background:${bg}; display:flex; align-items:center; justify-content:space-between; padding:0 14px; font-weight:900; font-size:12px;">
+            <div style="color:${titleColor};">${c.title||"Ügy"}</div>
+            <div style="color:${thiefColor};">${c.thiefName ? c.thiefName : "ELFOGÁSRA VÁRÓ TOLVAJ"}</div>
+          </div>
+        `;
+      }).join("") : ``}
+    </div>
+  `;
+}
+
+function renderPlayersBar(){
+  const wrap = document.getElementById("playersBar");
+  if(!wrap) return;
+  const players = state.players || [];
+  const curIdx = state.currentPlayerIndex || 0;
+
+  const palette = (typeof THEME_COLORS !== "undefined" ? THEME_COLORS : (window.THEME_COLORS||{}));
+  const getColor = (key)=> palette[key] || "#505050";
+
+  // Only show OTHER players (not the current/active player). Max 3 boxes (because max 4 players total).
+  const others = players
+    .map((pl,i)=>({pl,i}))
+    .filter(x=>x.i !== curIdx)
+    .slice(0,3);
+
+  wrap.innerHTML = others.map(({pl,i})=>{
+    const solved = (pl.solvedCases || []);
+    const capturedSet = new Set((pl.capturedThieves || []).map(t=>t.thiefName));
+    const solvedCount = solved.length;
+    const capturedCount = (pl.capturedThieves || []).length;
+
+    // "Körözési lista" = megoldott ügyei közül azok a tolvajok, akik még nincsenek elfogva
+    const wanted = [];
+    for(const c of solved){
+      if(!c || !c.thiefName) continue;
+      if(!capturedSet.has(c.thiefName)) wanted.push(c.thiefName);
+    }
+    // unique + limit to avoid overflow
+    const uniqWanted = Array.from(new Set(wanted)).slice(0, 6);
+
+    const bg = "var(--panel)";
+
+    const elimClass = pl.eliminated ? " eliminated" : "";
+    return `
+      <div class="playerMiniCard${elimClass}" style="background:${bg};">
+        ${pl.eliminated ? `<div class="pmcElimTag">KIESETT</div>` : ``}
+        <div class="pmcTop">
+          <div>
+            <div class="pmcName">${escapeHtml(pl.name || ("Ügynök "+(i+1)))}</div>
+            <div class="pmcChar">${escapeHtml(pl.characterName || "")}</div>
+          </div>
+          <div class="pmcLevel">${Number.isFinite(pl.agentLevel) ? pl.agentLevel : ""}</div>
+        </div>
+
+        <div class="pmcStats">
+          <div>MEGOLDOTT ÜGYEK: <b>${solvedCount}</b></div>
+          <div>ELFOGOTT TOLVAJOK: <b>${capturedCount}</b></div>
+        </div>
+
+        <div class="pmcWantedTitle">KÖRÖZÉSI LISTA</div>
+        <div class="pmcPills">
+          ${uniqWanted.map(n=>`<span class="pmcPill">${escapeHtml(n)}</span>`).join("")}
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+
+
+
+
+function checkEliminationCondition(){
+  try{
+    if(!state || !state._lastEliminated) return;
+    if(ui._kickShownId === state._lastEliminated.id) return;
+    ui._kickShownId = state._lastEliminated.id;
+    showKickModal(state._lastEliminated.name || "");
+  }catch(e){}
+}
+
+function advanceToNextActivePlayer(){
+  if(!state || !state.players || state.players.length===0) return;
+  let tries = 0;
+  let idx = state.currentPlayerIndex;
+  do{
+    idx = (idx + 1) % state.players.length;
+    tries++;
+  }while(tries <= state.players.length && state.players[idx] && state.players[idx].eliminated);
+  state.currentPlayerIndex = idx;
+  if(window.Engine && window.Engine.startTurn){
+    const started = window.Engine.startTurn(state);
+    state = started.next || state;
+    saveState(state);
+  }
+}
+
+
+function getHelpText(){
+  const phase = (state && state.turn) ? state.turn.phase : "";
+  if(phase==="AWAIT_DRAW") return "Következő lépés: HÚZÁS (+3 lap).";
+  if(phase==="AWAIT_ROLL") return "Következő lépés: DOBÁS.";
+  if(phase==="AFTER_ROLL") return "Következő lépés: válassz ügyet, jelölj ki tárgyakat/képességeket és MEGOLDOM, vagy PASSZ.";
+  if(phase==="DISCARDING") return "Következő lépés: jelöld ki a szükséges számú lapot eldobásra, majd ELDOBÁS.";
+  if(phase==="GAME_OVER") return "A játék véget ért.";
+  return "Következő lépés: nézd meg a gombokat a jobb oldalon (HÚZÁS / DOBÁS / MEGOLDOM / PASSZ).";
+}
+
+function showHelpModal(){
+  const modal = document.getElementById("helpModal");
+  const textEl = document.getElementById("helpModalText");
+  if(!modal || !textEl) return;
+  // Show "next step" help, plus any last status message (if present).
+  // This keeps instructional/error feedback behind an explicit user action.
+  const base = getHelpText();
+  const extra = (ui && ui.statusMsg) ? String(ui.statusMsg).trim() : "";
+  textEl.style.whiteSpace = "pre-line";
+  textEl.textContent = extra ? `${base}\n\n${extra}` : base;
+  const card = modal.querySelector(".winModalCard");
+  if(card){
+    card.style.background = getComputedStyle(document.documentElement).getPropertyValue('--theme-color').trim() || "var(--theme-color)";
+  }
+  modal.style.display = "flex";
+}
+
+function hideHelpModal(){
+  const modal = document.getElementById("helpModal");
+  if(modal) modal.style.display = "none";
+}
+
+function cardLabelForProfiler(c){
+  if(!c) return "—";
+  if(c.kind==="case") return `ÜGY: ${c.title||""}`.trim();
+  if(c.kind==="thief") return `TOLVAJ: ${c.thiefName||""}`.trim();
+  if(c.kind==="skill") {
+    const b = (typeof c.bonus==="number") ? c.bonus : 0;
+    const bonusTxt = b ? ` (+${b})` : ``;
+    return `KÉPESSÉG: ${c.name||""}${bonusTxt}`.trim();
+  }
+  return String(c.kind||"?");
+}
+
+function showPartnerModal(){
+  const p = activePlayer();
+  if(!p) return;
+  if(p.partnerCallUsed) return;
+  const others = (state.players||[]).filter(x=>x && x.id!==p.id && !x.eliminated);
+  if(!others.length) return;
+
+  const modal = document.getElementById("partnerModal");
+  const list = document.getElementById("partnerModalList");
+  if(!modal || !list) return;
+
+  list.innerHTML = others.map(op=>`<button class="btn btn-inverse partnerChoice" data-pid="${op.id}" style="min-width:220px;">${escapeHtml(op.name||op.id)}</button>`).join("");
+  modal.style.display = "flex";
+
+  // close handlers
+  const cancel = document.getElementById("partnerCancel");
+  if(cancel){
+    cancel.onclick = ()=>{ modal.style.display = "none"; };
+  }
+  // choose
+  list.querySelectorAll("[data-pid]").forEach(btn=>{
+    btn.onclick = (e)=>{
+      const pid = e.currentTarget.getAttribute("data-pid");
+      ui.selectedPartnerId = pid;
+      modal.style.display = "none";
+      render();
+    };
+  });
+
+  // stop propagation so clicks inside card don't close
+  const card = modal.querySelector(".winModalCard");
+  if(card){
+    card.onclick = (e)=>e.stopPropagation();
+  }
+  modal.onclick = ()=>{ modal.style.display="none"; };
+}
+
+
+function showProfilerPeekModal(){
+  const p = activePlayer();
+  if(!(p && p.characterKey==="PROFILER" && p.flags && p.flags.profilerPeekAvailable && !p.flags.profilerPeekUsed)){
+    return;
+  }
+  if(!(state && state.mixedDeck && state.mixedDeck.length>=2)) return;
+
+  const modal = document.getElementById('profilerModal');
+  const textEl = document.getElementById('profilerModalText');
+  const k1 = document.getElementById('profilerKeep1');
+  const k2 = document.getElementById('profilerKeep2');
+  const cancel = document.getElementById('profilerCancel');
+  if(!modal || !textEl || !k1 || !k2 || !cancel) return;
+
+  const a = state.mixedDeck[0];
+  const b = state.mixedDeck[1];
+  textEl.innerHTML = `A vegyes pakli tetején ez a 2 lap van:<br><br><b>1)</b> ${escapeHtml(cardLabelForProfiler(a))}<br><b>2)</b> ${escapeHtml(cardLabelForProfiler(b))}<br><br>Válaszd ki, melyik maradjon <b>felül</b>. A másik a kettő közül <b>alulra</b> kerül.`;
+
+  let escHandler = null;
+  const close = ()=>{
+    modal.style.display = 'none';
+    // remove temporary handlers
+    modal.onclick = null;
+    const cardEl = modal.querySelector('.winModalCard');
+    if(cardEl) cardEl.onclick = null;
+    if(escHandler) document.removeEventListener('keydown', escHandler);
+  };
+
+  // close only when clicking the dark overlay (not the card)
+  modal.onclick = (e)=>{ if(e && e.target===modal) close(); };
+  const cardEl = modal.querySelector('.winModalCard');
+  if(cardEl){ cardEl.onclick = (e)=>{ e.stopPropagation(); }; }
+
+  escHandler = (e)=>{ if(e && e.key==='Escape') close(); };
+  document.addEventListener('keydown', escHandler);
+
+  cancel.onclick = close;
+
+  k1.onclick = ()=>{
+    const r = window.Engine.profilerPeek(state, {keep:1});
+    close();
+    if(r && r.next) commit(r.next);
+  };
+  k2.onclick = ()=>{
+    const r = window.Engine.profilerPeek(state, {keep:2});
+    close();
+    if(r && r.next) commit(r.next);
+  };
+
+  modal.style.display = 'flex';
+}
+
+function showKickModal(playerName){
+  const modal = document.getElementById("kickModal");
+  const nameEl = document.getElementById("kickModalName");
+  if(!modal || !nameEl) return;
+  nameEl.textContent = playerName ? `(${playerName})` : "";
+  const card = document.getElementById("kickModalCard") || modal.querySelector(".winModalCard");
+  if(card){
+    const col = (state && state._lastEliminated && state._lastEliminated.color) ? state._lastEliminated.color : (getComputedStyle(document.documentElement).getPropertyValue('--theme-color').trim() || "var(--theme-color)");
+    card.style.background = col;
+  }
+  modal.style.display = "flex";
+}
+
+function hideKickModal(){
+  const modal = document.getElementById("kickModal");
+  if(modal) modal.style.display = "none";
+}
+
+function checkWinCondition(){
+  try{
+    if(state && state.turn && state.turn.phase==="GAME_OVER" && state.winner && !ui._winShown){
+      ui._winShown = true;
+      showWinModal(state.winner.name || ""); 
+      return;
+    }
+    const p = activePlayer();
+    const solved = (p.solvedCases||[]).length;
+    const captured = (p.capturedThieves||[]).length;
+    if(state && state.winner){ return; }
+    if(solved >= 3 && captured >= 3){
+      state.turn.phase = "GAME_OVER";
+      state.winner = { id:p.id, name:(p.name||""), color:(p.color||null) };
+      saveState(state);
+      ui._winShown = true;
+      showWinModal(p.name||"");
+    }
+  }catch(e){ /* ignore */ }
+}
+
+function showWinModal(playerName){
+  const modal = document.getElementById("winModal");
+  const nameEl = document.getElementById("winModalName");
+  if(!modal || !nameEl) return;
+  nameEl.textContent = playerName ? `(${playerName})` : "";
+  const card = modal.querySelector(".winModalCard");
+  if(card){
+    const col = (state && state.winner && state.winner.color) ? state.winner.color : (getComputedStyle(document.documentElement).getPropertyValue('--theme-color').trim() || "var(--theme-color)");
+    card.style.background = col;
+  }
+  modal.style.display = "flex";
+}
+
+function hideWinModal(){
+  const modal = document.getElementById("winModal");
+  if(modal) modal.style.display = "none";
+}
+
+function render(){
+  applyTheme();
+  renderHeader();
+  renderDecks();
+  renderRoll();
+  renderCase();
+  renderColumns();
+  renderSolved();
+  renderPlayersBar();
+
+  // PASSZ + ELDOBÁS (két külön gomb, a layout szerint)
+  const passBtn = document.getElementById("passBtn");
+  const discardBtn = document.getElementById("discardBtn");
+
+  if(passBtn){
+    passBtn.onclick = ()=>{
+      if(!window.Engine || !window.Engine.beginPassToEndTurn){
+        setStatus("Belső hiba: passz logika nem elérhető."); return;
+      }
+      const res = window.Engine.beginPassToEndTurn(state);
+      state = res.next;
+      saveState(state);
+      if(res.log) setStatus(res.log);
+      render();
+    };
+  }
+
+  if(discardBtn){
+    discardBtn.onclick = ()=>{
+      if(!window.Engine || !window.Engine.endTurn){
+        setStatus("Belső hiba: eldobás logika nem elérhető."); return;
+      }
+
+      if(!state.turn || state.turn.phase!=="DISCARDING"){
+        setStatus("Előbb PASSZ, majd jelöld ki az eldobandó lapokat.");
+        return;
+      }
+
+      const p = activePlayer();
+      const lim = (p.handLimit!=null ? p.handLimit : 5);
+      const need = Math.max(0, (p.tableCards||[]).length - lim);
+
+      if(ui.discardIds.size !== need){
+        setStatus(`Pontosan ${need} lapot jelölj ki eldobásra. (Most: ${ui.discardIds.size})`);
+        return;
+      }
+
+      const res = window.Engine.endTurn(state, Array.from(ui.discardIds));
+      state = res.next;
+      saveState(state);
+      resetDiscardSelections();
+      resetUseSelections();
+      ui.selectedCaseId = null;
+      render();
+      if(res.log) setStatus(res.log);
+    };
+  }
+
+  checkWinCondition();
+  checkEliminationCondition();
+}
+
+
+attachSocket();
+render();
+
+document.addEventListener("DOMContentLoaded", ()=>{
+  const ok = document.getElementById("winModalOk");
+  if(ok) ok.onclick = hideWinModal;
+});
+
+document.addEventListener("DOMContentLoaded", ()=>{
+  const ok2 = document.getElementById("kickModalOk");
+  if(ok2) ok2.onclick = ()=>{
+    hideKickModal();
+    // After acknowledgement, advance to the next active player and start their turn.
+    if(window.Engine && typeof window.Engine.ackElimination==="function"){
+      if(IS_ONLINE){ sendAction('ACK_ELIMINATION'); return; }
+      const r = window.Engine.ackElimination(state);
+      if(r && r.next){
+        resetDiscardSelections();
+        resetUseSelections();
+        ui.selectedCaseId = null;
+        ui.selectedPartnerId = null;
+        commit(r.next);
+        if(r.log) setStatus(r.log);
       }
     }
   };
