@@ -61,6 +61,11 @@ a{color:inherit; text-decoration:none;}
   color:#111;
 }
 
+.btn-start{
+  background:#fff;
+  color:#282828;
+}
+
 /* Profiler modal choice buttons: ensure visible label on white background */
 .profilerChoice{
   color:#282828 !important;
