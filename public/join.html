@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="hu">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Ügynökök – Csatlakozás</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script defer src="utils.js"></script>
+  <script defer src="engine.js"></script>
+  <script defer src="join.js"></script>
+  <style>
+    body{ background:#f8bd01; }
+    .panel{ padding:24px; }
+    .h1{ font-size:28px; font-weight:900; color:#111; margin:0 0 12px; }
+    .hint{ color:#111; opacity:.85; margin:0 0 18px; }
+    input[type="text"], input[type="password"]{ width:100%; padding:12px 14px; border-radius:14px; border:0; outline:none; font-size:16px; box-sizing:border-box; }
+    .grid{ display:grid; grid-template-columns:repeat(3, 1fr); gap:16px; margin-top:18px;}
+    .charCard{ background:#282828; border-radius:25px; padding:14px; display:flex; flex-direction:column; gap:12px; }
+    .charImg{ width:100%; aspect-ratio:5/7; border-radius:16px; overflow:hidden; background:#111; }
+    .charImg img{ width:100%; height:100%; object-fit:cover; display:block; }
+    .pickBtn{ width:100%; position:static; }
+    .picked{ outline:3px solid rgba(255,255,255,.6); outline-offset:2px; }
+    @media (max-width: 900px){ .grid{ grid-template-columns:repeat(2,1fr);} }
+    @media (max-width: 560px){ .grid{ grid-template-columns:1fr;} }
+  </style>
+</head>
+<body>
+  <div class="main">
+    <div class="panel">
+      <h1 class="h1">Csatlakozás (Join)</h1>
+      <p class="hint">Add meg a szoba kódot, a neved, és válassz karaktert.</p>
+
+      <div class="row" style="gap:12px; flex-wrap:wrap;">
+        <div style="width:220px;">
+          <div style="font-weight:900; color:#111; margin:0 0 6px;">Szoba kód</div>
+          <input id="room" type="text" placeholder="ABCD" />
+        </div>
+        <div style="flex:1; min-width:260px;">
+          <div style="font-weight:900; color:#111; margin:0 0 6px;">Név</div>
+          <input id="name" type="text" placeholder="Pl. Ügynök 2" />
+        </div>
+        <div style="width:260px;">
+          <div style="font-weight:900; color:#111; margin:0 0 6px;">Jelszó (ha van)</div>
+          <input id="password" type="password" placeholder="(üres = nincs)" />
+        </div>
+      </div>
+
+      <div style="margin-top:18px; font-weight:900; color:#111;">Karakter</div>
+      <div id="charGrid" class="grid"></div>
+
+      <div class="row" style="margin-top:18px;">
+        <a class="btn btn-outline" href="intro.html">Vissza</a>
+        <button id="join" class="btn btn-theme">Csatlakozás</button>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

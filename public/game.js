@@ -40,7 +40,8 @@ let state = (typeof loadState === "function") ? loadState() : null;
 /* ================= Online (LAN/Render) sync ================= */
 const params = new URLSearchParams(location.search);
 const ROOM = (params.get('room') || '').toUpperCase();
-const PLAYER_INDEX = Math.max(0, parseInt(params.get('player') || '0', 10) || 0);
+const TOKEN = params.get('token') || '';
+let PLAYER_INDEX = Math.max(0, parseInt(params.get('player') || '0', 10) || 0);
 const IS_ONLINE = !!ROOM;
 
 let socket = null;
@@ -52,10 +53,13 @@ function sendAction(type, payload){
 function attachSocket(){
   if(!IS_ONLINE) return;
   if(typeof io === 'function'){
-    socket = io({ query: { room: ROOM, player: String(PLAYER_INDEX) } });
+    const query = TOKEN ? { room: ROOM, token: TOKEN } : { room: ROOM, player: String(PLAYER_INDEX) };
+    socket = io({ query });
 
     socket.on('state', (s) => {
       state = s;
+      // Token-based mode: server tells us who we are.
+      if(state && typeof state._meIndex === 'number') PLAYER_INDEX = state._meIndex;
       try{ if(typeof saveState==="function") saveState(state); }catch(e){}
       render();
     });
@@ -68,7 +72,7 @@ function attachSocket(){
 
     socket.on('connect_error', (err) => {
       console.warn("socket connect_error:", err);
-      if(typeof toast === "function") toast("Kapcsolati hiba (socket). Nézd meg a szoba kódot és a player indexet.");
+      if(typeof toast === "function") toast("Kapcsolati hiba (socket). Nézd meg a szoba kódot és a token-t.");
     });
 
   } else {
@@ -93,6 +97,14 @@ if(!state || !state.players){
       turn:{phase:"AWAIT_DRAW", diceFaces:[], investigationsLeft:0, skillPlaysLeft:0}
     };
   }
+}
+
+function deckCount(which){
+  if(!state) return 0;
+  if(which==='mixed') return (state.mixedDeckCount ?? (state.mixedDeck ? state.mixedDeck.length : 0)) || 0;
+  if(which==='item') return (state.itemDeckCount ?? (state.itemDeck ? state.itemDeck.length : 0)) || 0;
+  if(which==='skill') return (state.skillDeckCount ?? (state.skillDeck ? state.skillDeck.length : 0)) || 0;
+  return 0;
 }
 
 /* --------- UI state (selection / discard) --------- */
@@ -286,7 +298,7 @@ function renderDecks(){
           </div>
         </div>
         <div style="font-size:68px; font-weight:900; color:var(--theme-color); line-height:1; margin-top:0;">
-          ${state.mixedDeck?.length ?? 0}
+          ${deckCount('mixed')}
         </div>
       </div>
     `;
@@ -318,7 +330,7 @@ function renderDecks(){
           <div style="font-size:14px; font-weight:400; color:#ffffff; line-height:1.1; margin-top:2px;">(tárgy kártyák)</div>
         </div>
         <div style="font-size:68px; font-weight:900; color:var(--theme-color); line-height:1; margin-top:0;">
-          ${state.itemDeck?.length ?? 0}
+          ${deckCount('item')}
         </div>
       </div>
     `;
@@ -805,7 +817,8 @@ function showProfilerPeekModal(){
   const ok = (p && p.characterKey==="PROFILER" && p.flags && p.flags.profilerPeekAvailable && !p.flags.profilerPeekUsed
     && (phase==="AWAIT_ROLL" || phase==="AFTER_ROLL"));
   if(!ok) return;
-  if(!(state && state.mixedDeck && state.mixedDeck.length>=2)) return;
+  const top2 = state && state.mixedDeckTop2;
+  if(!(top2 && Array.isArray(top2) && top2.length>=2)) return;
 
   const modal = document.getElementById('profilerModal');
   const textEl = document.getElementById('profilerModalText');
@@ -814,8 +827,8 @@ function showProfilerPeekModal(){
   const cancel = document.getElementById('profilerCancel');
   if(!modal || !textEl || !k1 || !k2 || !cancel) return;
 
-  const a = state.mixedDeck[0];
-  const b = state.mixedDeck[1];
+  const a = top2[0];
+  const b = top2[1];
 
   textEl.innerHTML =
     `A vegyes pakli tetején ez a 2 lap van:<br><br>`+

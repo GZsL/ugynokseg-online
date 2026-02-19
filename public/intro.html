@@ -10,24 +10,35 @@
     .wrap{ min-height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center; gap:18px; padding:24px; box-sizing:border-box;}
     .videoBox{ width:min(1200px, 92vw); aspect-ratio:16/9; border-radius:20px; overflow:hidden; border:3px solid #2b2b2b; background:#000;}
     video{ width:100%; height:100%; object-fit:cover; display:block; }
-    .cta{ visibility:hidden; }
-    .cta.show{ visibility:visible; }
+    .menu{ display:flex; gap:12px; flex-wrap:wrap; justify-content:center; }
+    .pill{ background:#282828; color:#fff; padding:10px 14px; border-radius:999px; font-weight:900; }
   </style>
 </head>
 <body>
   <div class="wrap">
+    <div class="pill">ÜGYNÖKÖK ÉS TOLVAJOK – ONLINE MVP</div>
     <div class="videoBox">
-      <video id="introVid" src="assets/intro_animacio.mp4" autoplay playsinline muted></video>
+      <video id="introVid" autoplay playsinline muted></video>
     </div>
-    <a id="cta" class="btn btn-theme cta" href="setup.html">Nyomozzunk!</a>
+    <div class="menu">
+      <a class="btn btn-theme" href="host.html">Új szoba (Host)</a>
+      <a class="btn btn-outline" href="join.html">Csatlakozás (Join)</a>
+      <a class="btn btn-outline" href="setup.html" title="Régi technikai setup (player=0..3)">Setup (legacy)</a>
+    </div>
   </div>
 
   <script>
-    const v=document.getElementById("introVid");
-    const cta=document.getElementById("cta");
-    v.addEventListener("ended", ()=>{ cta.classList.add("show"); });
-    // keep last frame: don't reset src, don't loop
-    v.addEventListener("loadedmetadata", ()=>{ v.play().catch(()=>{}); });
+    // Több intro videó esetén random választ.
+    // Ha csak egy van, működik ugyanúgy.
+    const SOURCES = [
+      "assets/intro_animacio.mp4",
+      "assets/intro_animacio_2.mp4",
+      "assets/intro_animacio_3.mp4"
+    ];
+    const v = document.getElementById('introVid');
+    const pick = SOURCES[Math.floor(Math.random()*SOURCES.length)];
+    v.src = pick;
+    v.addEventListener('loadedmetadata', ()=>{ v.play().catch(()=>{}); });
   </script>
 </body>
 </html>

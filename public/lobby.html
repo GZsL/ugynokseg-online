@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="hu">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Ügynökök – Lobby</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script defer src="/socket.io/socket.io.js"></script>
+  <script defer src="utils.js"></script>
+  <script defer src="engine.js"></script>
+  <script defer src="lobby.js"></script>
+  <style>
+    body{ background:#f8bd01; }
+    .panel{ padding:24px; }
+    .h1{ font-size:28px; font-weight:900; color:#111; margin:0 0 12px; }
+    .hint{ color:#111; opacity:.85; margin:0 0 18px; }
+    .box{ background:#282828; border-radius:20px; padding:16px; }
+    .code{ font-size:30px; font-weight:1000; letter-spacing:6px; }
+    .playerRow{ display:flex; justify-content:space-between; align-items:center; gap:12px; padding:10px 12px; border-radius:14px; background:#1f1f1f; }
+    .badge{ padding:6px 10px; border-radius:999px; font-weight:900; font-size:12px; }
+    .badge.ready{ background:#2ecc71; color:#111; }
+    .badge.notready{ background:#f39c12; color:#111; }
+    .badge.offline{ background:#7f8c8d; color:#111; }
+    .mini{ font-size:12px; opacity:.85; }
+    input[type="text"]{ width:100%; padding:10px 12px; border-radius:12px; border:0; outline:none; }
+  </style>
+</head>
+<body>
+  <div class="main">
+    <div class="panel">
+      <h1 class="h1">Lobby</h1>
+      <p class="hint">Várjuk a játékosokat. Mindenki legyen READY, a host indít.</p>
+
+      <div class="row" style="gap:16px; flex-wrap:wrap;">
+        <div class="box" style="flex:1; min-width:280px;">
+          <div class="mini">Szobakód</div>
+          <div id="roomCode" class="code">—</div>
+          <div style="margin-top:10px;" class="mini">Meghívó link (másolható)</div>
+          <input id="invite" type="text" readonly value="" onclick="this.select()" />
+        </div>
+
+        <div class="box" style="flex:1; min-width:280px;">
+          <div class="mini">Státusz</div>
+          <div id="status" style="font-weight:900; margin-top:6px;">Kapcsolódás…</div>
+          <div style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap;">
+            <button id="readyBtn" class="btn btn-theme">READY</button>
+            <button id="startBtn" class="btn btn-inverse">START (host)</button>
+            <a class="btn btn-outline" href="intro.html">Kilépés</a>
+          </div>
+          <div id="hint2" class="mini" style="margin-top:10px; color:rgba(255,255,255,.85);"></div>
+        </div>
+      </div>
+
+      <div class="box" style="margin-top:16px;">
+        <div style="font-weight:1000; margin-bottom:10px;">Játékosok</div>
+        <div id="players"></div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
