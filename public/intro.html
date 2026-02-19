@@ -18,7 +18,7 @@
   <div class="wrap">
     <div class="pill">ÜGYNÖKÖK ÉS TOLVAJOK – ONLINE MVP</div>
     <div class="videoBox">
-      <video id="introVid" autoplay playsinline muted></video>
+      <video id="introVideo" autoplay muted playsinline></video>
     </div>
     <div class="menu">
       <a class="btn btn-theme" href="host.html">Új szoba (Host)</a>
@@ -40,5 +40,42 @@
     v.src = pick;
     v.addEventListener('loadedmetadata', ()=>{ v.play().catch(()=>{}); });
   </script>
+<script>
+const video = document.getElementById("introVideo");
+
+const videos = [
+  "assets/videos/intro1.mp4",
+  "assets/videos/intro2.mp4",
+  "assets/videos/intro3.mp4"
+];
+
+let lastIndex = -1;
+
+function getRandomIndex() {
+  if (videos.length <= 1) return 0;
+
+  let index;
+  do {
+    index = Math.floor(Math.random() * videos.length);
+  } while (index === lastIndex);
+
+  lastIndex = index;
+  return index;
+}
+
+function playRandomVideo() {
+  const index = getRandomIndex();
+  video.src = videos[index];
+  video.play().catch(() => {});
+}
+
+// Első betöltéskor
+playRandomVideo();
+
+// Ha vége, jöjjön másik random
+video.addEventListener("ended", () => {
+  playRandomVideo();
+});
+</script>
 </body>
 </html>
