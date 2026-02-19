@@ -228,7 +228,7 @@ function renderHeader(){
           ].map(([t,v])=>`
             <div style="width:180px; height:96px; background:var(--theme-color); color:#fff; border-radius:12px; padding:10px 12px; box-sizing:border-box;">
               <div style="font-size:18px; color:rgba(255,255,255,.65); font-weight:700; display:flex; align-items:center; justify-content:space-between;">
-                <span>${t}</span>${t==="Fix tárgyak" ? `<button class="helpBtn" id="helpBtn" title="Segítség">?</button>` : ``}
+                <span>${t}</span>${t==="Fix tárgyak" ? `<button class="btn btn-inverse" id="rulesBtn" style="height:28px; padding:0 10px; border-radius:10px; font-weight:900; font-size:12px;">Játék menete</button>` : ``}
               </div>
               <div style="font-size:45px; font-weight:900;">${v}</div>
             </div>
@@ -246,8 +246,8 @@ function renderHeader(){
     </div>
   `;
 
-  const hb = document.getElementById('helpBtn');
-  if(hb){ hb.onclick = ()=>showHelpModal(); }
+  const rb = document.getElementById('rulesBtn');
+  if(rb){ rb.onclick = ()=>showHelpModal(); }
 
   requestAnimationFrame(() => {
     const agent = document.getElementById('agentName');
@@ -361,7 +361,6 @@ function renderRoll(){
     <div style="display:flex; align-items:center; height:100%; gap:16px;">
       <div style="display:flex; align-items:center; gap:10px; flex:0 0 auto;">
         <button class="btn btn-theme" style="height:44px; width:140px;" id="rollBtn" ${rollDisabled ? "disabled" : ""}>DOBÁS</button>
-        <button class="helpBtn" id="helpBtnRoll" title="Segítség">?</button>
       </div>
 
       <div style="flex:1 1 auto; display:flex; justify-content:center;">
@@ -393,8 +392,6 @@ function renderRoll(){
     };
   }
 
-  const hb = roll.querySelector("#helpBtnRoll");
-  if(hb){ hb.onclick = ()=>showHelpModal(); }
 }
 
 /* --------- Case panel --------- */
@@ -614,6 +611,8 @@ function renderColumns(){
       const id = el.getAttribute("data-id");
 
       if(isDiscarding){
+        // PASSZ/ELDOBÁS közben is lehessen az ÜGY részleteit megnézni
+        if(kind==="case") ui.selectedCaseId = id;
         if(ui.discardIds.has(id)) ui.discardIds.delete(id);
         else ui.discardIds.add(id);
         render();
@@ -694,6 +693,18 @@ function renderPlayersBar(){
     .filter(x => x.i !== myIdx)
     .slice(0,3);
 
+  const palette = (typeof THEME_COLORS !== "undefined" ? THEME_COLORS : (window.THEME_COLORS||{}));
+  const activeIdx = turnIndex();
+
+  const isLightHex = (hex)=>{
+    if(!hex || typeof hex!=="string" || !hex.startsWith('#') || hex.length<7) return false;
+    const r = parseInt(hex.slice(1,3),16);
+    const g = parseInt(hex.slice(3,5),16);
+    const b = parseInt(hex.slice(5,7),16);
+    const lum = (0.2126*r + 0.7152*g + 0.0722*b) / 255;
+    return lum > 0.65;
+  };
+
   wrap.innerHTML = others.map(({pl,i})=>{
     const solved = (pl.solvedCases || []);
     const capturedSet = new Set((pl.capturedThieves || []).map(t=>t.thiefName));
@@ -708,23 +719,26 @@ function renderPlayersBar(){
     const uniqWanted = Array.from(new Set(wanted)).slice(0, 6);
 
     const elimClass = pl.eliminated ? " eliminated" : "";
+    const isActive = (i === activeIdx);
+    const bg = isActive ? (palette[pl.characterKey] || "var(--theme-color)") : "var(--panel)";
+    const fg = isActive ? (isLightHex(bg) ? "#282828" : "#fff") : null;
     return `
-      <div class="playerMiniCard${elimClass}" style="background:var(--panel);">
+      <div class="playerMiniCard${elimClass}" style="background:${bg}; ${fg?`color:${fg};`:""}">
         ${pl.eliminated ? `<div class="pmcElimTag">KIESETT</div>` : ``}
         <div class="pmcTop">
           <div>
-            <div class="pmcName">${escapeHtml(pl.name || ("Ügynök "+(i+1)))}</div>
-            <div class="pmcChar">${escapeHtml(pl.characterName || pl.characterKey || "")}</div>
+            <div class="pmcName" style="${fg?`color:${fg};`:""}">${escapeHtml(pl.name || ("Ügynök "+(i+1)))}</div>
+            <div class="pmcChar" style="${fg?`color:${fg}; opacity:.85;`:""}">${escapeHtml(pl.characterName || pl.characterKey || "")}</div>
           </div>
-          <div class="pmcLevel">${Number.isFinite(pl.agentLevel) ? pl.agentLevel : ""}</div>
+          <div class="pmcLevel" style="${fg?`color:${fg};`:""}">${Number.isFinite(pl.agentLevel) ? pl.agentLevel : ""}</div>
         </div>
 
-        <div class="pmcStats">
+        <div class="pmcStats" style="${fg?`color:${fg};`:""}">
           <div>MEGOLDOTT ÜGYEK: <b>${solvedCount}</b></div>
           <div>ELFOGOTT TOLVAJOK: <b>${capturedCount}</b></div>
         </div>
 
-        <div class="pmcWantedTitle">KÖRÖZÉSI LISTA</div>
+        <div class="pmcWantedTitle" style="${fg?`color:${fg};`:""}">KÖRÖZÉSI LISTA</div>
         <div class="pmcPills">
           ${uniqWanted.map(n=>`<span class="pmcPill">${escapeHtml(n)}</span>`).join("")}
         </div>
@@ -735,14 +749,15 @@ function renderPlayersBar(){
 
 /* --------- Help modal --------- */
 function getHelpText(){
-  const phase = state?.turn?.phase || "";
-  if(IS_ONLINE && !isMyTurn()) return "Most nem te vagy soron. Várd meg a körödet.";
-  if(phase==="AWAIT_DRAW") return "Következő lépés: HÚZÁS (+3 lap).";
-  if(phase==="AWAIT_ROLL") return "Következő lépés: DOBÁS.";
-  if(phase==="AFTER_ROLL") return "Következő lépés: válassz ügyet, jelölj ki tárgyakat/képességeket és MEGOLDOM, vagy PASSZ.";
-  if(phase==="DISCARDING") return "Következő lépés: jelöld ki a szükséges számú lapot eldobásra, majd ELDOBÁS.";
-  if(phase==="GAME_OVER") return "A játék véget ért.";
-  return "Következő lépés: nézd meg a gombokat (HÚZÁS / DOBÁS / MEGOLDOM / PASSZ).";
+  return (
+    "1) HÚZÁS: a kör elején húzol 3 lapot a vegyes pakliból.\n"+
+    "2) DOBÁS: 6 kockával dobsz (nyomozás / képesség / tárgy).\n"+
+    "3) ÜGY VÁLASZTÁS: válassz egy ÜGY kártyát a kezedből.\n"+
+    "4) SEGÉDESZKÖZÖK: jelölj ki TÁRGY és KÉPESSÉG lapokat (a FIX tárgyak automatikusan számítanak).\n"+
+    "5) MEGOLDOM: megpróbálod megoldani az ügyet (siker/kudarc szerint változik a szinted).\n"+
+    "6) PASSZ: ha nem oldasz meg ügyet, PASSZ → jelöld ki a dobásra szánt lapokat → ELDOBÁS.\n"+
+    "\nTipp: PASSZ/ELDOBÁS közben is rákattinthatsz egy ÜGY kártyára, hogy lásd a részleteit."
+  );
 }
 
 function showHelpModal(){
@@ -751,9 +766,8 @@ function showHelpModal(){
   if(!modal || !textEl) return;
 
   const base = getHelpText();
-  const extra = (ui.statusMsg || "").trim();
   textEl.style.whiteSpace = "pre-line";
-  textEl.textContent = extra ? `${base}\n\n${extra}` : base;
+  textEl.textContent = base;
 
   const card = modal.querySelector(".winModalCard");
   if(card){
@@ -865,10 +879,29 @@ function showWinModal(playerName){
   const modal = document.getElementById("winModal");
   const nameEl = document.getElementById("winModalName");
   if(!modal || !nameEl) return;
-  nameEl.textContent = playerName ? `(${playerName})` : "";
+  const titleEl = modal.querySelector('.winModalTitle');
+
+  const meId = state?._meId || (me() ? me().id : null);
+  const winnerId = state?.winner?.id || null;
+  const winnerName = playerName || state?.winner?.name || "";
+  const isWinner = !!(meId && winnerId && meId === winnerId);
+
+  if(isWinner){
+    if(titleEl) titleEl.textContent = "NYERTÉL! TE VAGY A LEGJOBB ÜGYNÖKÜNK!";
+    nameEl.textContent = winnerName ? `(${winnerName})` : "";
+  }else{
+    if(titleEl) titleEl.textContent = `Jó ügynök vagy, de ezt a kört most \"${winnerName}\" nyerte!`;
+    nameEl.textContent = "";
+  }
   const card = modal.querySelector(".winModalCard");
   if(card){
-    const col = (state?.winner?.color) ? state.winner.color : (getComputedStyle(document.documentElement).getPropertyValue('--theme-color').trim() || "var(--theme-color)");
+    const palette = (typeof THEME_COLORS !== "undefined" ? THEME_COLORS : (window.THEME_COLORS||{}));
+    let col = (state?.winner?.color) ? state.winner.color : null;
+    if(!col && winnerId){
+      const wp = (state.players||[]).find(p=>p && p.id===winnerId);
+      if(wp && wp.characterKey) col = palette[wp.characterKey] || null;
+    }
+    if(!col) col = "#2b2b2b";
     card.style.background = col;
   }
   modal.style.display = "flex";
