@@ -288,7 +288,7 @@ Ha nem te vártad ezt a levelet, nyugodtan hagyd figyelmen kívül.`;
     return res.status(500).json({ error: 'Szerver hiba e-mail küldés közben.' });
   }
 });
-us(400).json({ error: out.error });
+return res.status(400).json({ error: out.error });
     return res.json({ room, token: out.token });
   }catch(e){
     console.error(e);
