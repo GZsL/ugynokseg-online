@@ -19,6 +19,15 @@ if(!ROOM || !TOKEN){
 const roomCodeEl = document.getElementById('roomCode');
 const copyInviteBtn = document.getElementById('copyInviteBtn');
 const copyHint = document.getElementById('copyHint');
+const sendInviteBtn = document.getElementById('sendInviteBtn');
+const sendHint = document.getElementById('sendHint');
+const sendErr = document.getElementById('sendErr');
+const inviteModal = document.getElementById('inviteModal');
+const inviteEmails = document.getElementById('inviteEmails');
+const inviteCancelBtn = document.getElementById('inviteCancelBtn');
+const inviteSendBtn = document.getElementById('inviteSendBtn');
+const inviteModalErr = document.getElementById('inviteModalErr');
+
 const statusEl = document.getElementById('status');
 const playersEl = document.getElementById('players');
 const readyBtn = document.getElementById('readyBtn');
@@ -27,6 +36,89 @@ const hint2 = document.getElementById('hint2');
 
 roomCodeEl.textContent = ROOM;
 const inviteLink = `${location.origin}/join.html?room=${encodeURIComponent(ROOM)}`;
+function showModal(show){
+  if(!inviteModal) return;
+  inviteModal.style.display = show ? 'flex' : 'none';
+}
+function setElVisible(el, vis){
+  if(!el) return;
+  el.style.display = vis ? 'block' : 'none';
+}
+function normalizeEmails(raw){
+  const parts = String(raw||'')
+    .split(/[,\n\r\t\s]+/g)
+    .map(s=>s.trim())
+    .filter(Boolean);
+  // basic validate
+  const emails = parts.filter(e => /.+@.+\..+/.test(e));
+  return Array.from(new Set(emails)); // unique
+}
+
+// OPEN modal
+if(sendInviteBtn){
+  sendInviteBtn.addEventListener('click', ()=>{
+    if(inviteEmails) inviteEmails.value = '';
+    if(inviteModalErr) inviteModalErr.style.display='none';
+    showModal(true);
+    setElVisible(sendErr,false);
+    setElVisible(sendHint,false);
+  });
+}
+if(inviteCancelBtn){
+  inviteCancelBtn.addEventListener('click', ()=> showModal(false));
+}
+// click outside closes
+if(inviteModal){
+  inviteModal.addEventListener('click', (e)=>{
+    if(e.target === inviteModal) showModal(false);
+  });
+}
+
+if(inviteSendBtn){
+  inviteSendBtn.addEventListener('click', async ()=>{
+    try{
+      setElVisible(inviteModalErr,false);
+      const emails = normalizeEmails(inviteEmails ? inviteEmails.value : '');
+      if(!emails.length){
+        if(inviteModalErr){
+          inviteModalErr.textContent = 'Adj meg legalább 1 érvényes e-mail címet.';
+          setElVisible(inviteModalErr,true);
+        }
+        return;
+      }
+      inviteSendBtn.disabled = true;
+      const resp = await fetch('/api/send-invite', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify({ room: ROOM, token: TOKEN, emails })
+      });
+      const data = await resp.json().catch(()=>({}));
+      inviteSendBtn.disabled = false;
+
+      if(!resp.ok || data.error){
+        const msg = data && data.error ? data.error : 'Nem sikerült elküldeni a meghívót.';
+        if(inviteModalErr){
+          inviteModalErr.textContent = msg;
+          setElVisible(inviteModalErr,true);
+        }
+        return;
+      }
+
+      showModal(false);
+      if(sendHint){
+        sendHint.style.display='block';
+        setTimeout(()=>{ sendHint.style.display='none'; }, 1400);
+      }
+    }catch(err){
+      console.error(err);
+      if(inviteModalErr){
+        inviteModalErr.textContent = 'Hiba történt küldés közben.';
+        setElVisible(inviteModalErr,true);
+      }
+      if(inviteSendBtn) inviteSendBtn.disabled=false;
+    }
+  });
+}
 
 
 // Meghívó link másolása gomb

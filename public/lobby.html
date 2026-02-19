@@ -25,6 +25,54 @@
     input[type="text"]{ width:100%; padding:10px 12px; border-radius:12px; border:0; outline:none; }
     /* Start gomb: fehér háttér + sötét szöveg */
     #startBtn{ color:#282828 !important; }
+  
+.inviteBtn{
+  background:#fff !important;
+  color:#282828 !important;
+  text-transform:uppercase;
+  font-weight:900;
+  letter-spacing:.5px;
+}
+.inviteBtn:hover{ filter:brightness(0.97); }
+.modalOverlay{
+  position:fixed; inset:0; background:rgba(0,0,0,.55);
+  display:flex; align-items:center; justify-content:center;
+  z-index:9999;
+  padding:16px;
+}
+.modalCard{
+  width:min(520px, 95vw);
+  background:#1f1f1f;
+  border-radius:16px;
+  padding:18px;
+  box-shadow:0 10px 40px rgba(0,0,0,.35);
+}
+.modalTitle{
+  font-size:18px;
+  font-weight:900;
+  letter-spacing:.6px;
+}
+.modalTextarea{
+  width:100%;
+  margin-top:10px;
+  border-radius:12px;
+  border:1px solid rgba(255,255,255,.15);
+  background:#2a2a2a;
+  color:#fff;
+  padding:12px;
+  resize:vertical;
+  outline:none;
+  font-family:inherit;
+}
+.modalTextarea:focus{
+  border-color:rgba(248,189,1,.7);
+  box-shadow:0 0 0 3px rgba(248,189,1,.15);
+}
+.modalActions{
+  display:flex;
+  gap:10px;
+  margin-top:12px;
+}
   </style>
 </head>
 <body>
@@ -38,10 +86,17 @@
           <div class="mini">Szobakód</div>
           <div id="roomCode" class="code">—</div>
                     <div style="margin-top:10px;" class="mini">Meghívó link</div>
-          <button id="copyInviteBtn" class="btn btn-inverse" style="width:100%; margin-top:6px; color:#282828; background:#fff;">
-            Meghívó link másolása
-          </button>
-          <div id="copyHint" class="mini" style="margin-top:6px; opacity:.75; display:none;">Másolva ✅</div>
+<div class="inviteRow" style="display:flex; gap:10px; margin-top:6px;">
+  <button id="copyInviteBtn" class="btn btn-inverse inviteBtn" type="button" style="flex:1;">
+    MEGHÍVÓ LINK MÁSOLÁSA
+  </button>
+  <button id="sendInviteBtn" class="btn btn-inverse inviteBtn" type="button" style="flex:1;">
+    MEGHÍVÓ LINK KÜLDÉSE
+  </button>
+</div>
+<div id="copyHint" class="mini" style="margin-top:6px; opacity:.75; display:none;">Másolva ✅</div>
+<div id="sendHint" class="mini" style="margin-top:6px; opacity:.75; display:none;">Kiküldve ✅</div>
+<div id="sendErr" class="mini" style="margin-top:6px; color:#b00020; display:none;"></div>
 </div>
 
         <div class="box" style="flex:1; min-width:280px;">
@@ -62,5 +117,20 @@
       </div>
     </div>
   </div>
+<!-- Invite email modal -->
+<div id="inviteModal" class="modalOverlay" style="display:none;">
+  <div class="modalCard">
+    <div class="modalTitle">MEGHÍVÓ LINK KÜLDÉSE</div>
+    <div class="mini" style="margin-top:6px; opacity:.85;">
+      Írj be 1 vagy több e-mail címet (vesszővel vagy új sorral elválasztva):
+    </div>
+    <textarea id="inviteEmails" class="modalTextarea" rows="5" placeholder="pelda@ceg.hu, masik@ceg.hu"></textarea>
+    <div class="modalActions">
+      <button id="inviteCancelBtn" class="btn btn-inverse inviteBtn" type="button" style="flex:1;">BEZÁR</button>
+      <button id="inviteSendBtn" class="btn btn-inverse inviteBtn" type="button" style="flex:1;">KÜLDÉS</button>
+    </div>
+    <div id="inviteModalErr" class="mini" style="margin-top:8px; color:#b00020; display:none;"></div>
+  </div>
+</div>
 </body>
 </html>

@@ -3,6 +3,7 @@ const http = require('http');
 const express = require('express');
 const { Server } = require('socket.io');
 const Engine = require('./engine-core');
+const nodemailer = require('nodemailer');
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -28,6 +29,17 @@ app.get('/', (req,res)=>{
  */
 /** @type {Map<string, any>} */
 const rooms = new Map();
+
+
+function escapeHtml(str){
+  return String(str==null?"":str)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#039;');
+}
+
 
 function makeRoomCode(len = 4){
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -194,7 +206,89 @@ app.post('/api/join-room', (req, res) => {
     if(!characterKey) return res.status(400).json({ error: 'Válassz karaktert.' });
 
     const out = joinLobbyRoom({ roomCode: room, name, characterKey, password });
-    if(out.error) return res.status(400).json({ error: out.error });
+    if(out.error) return res.stat
+
+// NEW: send invite email(s) (host only)
+app.post('/api/send-invite', async (req, res) => {
+  try{
+    const b = req.body || {};
+    const room = String(b.room||'').trim().toUpperCase();
+    const token = String(b.token||'').trim();
+    const emails = Array.isArray(b.emails) ? b.emails.map(x=>String(x||'').trim()).filter(Boolean) : [];
+
+    if(!room) return res.status(400).json({ error: 'Hiányzik a szobakód.' });
+    if(!token) return res.status(400).json({ error: 'Hiányzik a token.' });
+    if(!emails.length) return res.status(400).json({ error: 'Adj meg legalább 1 e-mail címet.' });
+
+    const r = rooms.get(room);
+    if(!r) return res.status(404).json({ error: 'Szoba nem található.' });
+
+    const host = (r.players||[]).find(p => p && p.token === token);
+    if(!host) return res.status(403).json({ error: 'Érvénytelen token ehhez a szobához.' });
+    if(!host.isHost) return res.status(403).json({ error: 'Csak a host küldhet meghívót.' });
+
+    const SMTP_HOST = process.env.SMTP_HOST;
+    const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587', 10);
+    const SMTP_USER = process.env.SMTP_USER;
+    const SMTP_PASS = process.env.SMTP_PASS;
+    const SMTP_SECURE = String(process.env.SMTP_SECURE||'').toLowerCase()==='true';
+    const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER;
+
+    if(!SMTP_HOST || !SMTP_USER || !SMTP_PASS){
+      return res.status(400).json({
+        error: 'E-mail küldés nincs beállítva a szerveren (SMTP_HOST/SMTP_USER/SMTP_PASS env hiányzik).'
+      });
+    }
+
+    const proto = req.get('x-forwarded-proto') || req.protocol || 'https';
+    const hostHeader = req.get('x-forwarded-host') || req.get('host');
+    const baseUrl = `${proto}://${hostHeader}`;
+    const joinLink = `${baseUrl}/join.html?room=${encodeURIComponent(room)}`;
+
+    const subject = `Meghívó az ÜGYNÖKSÉGHEZ – szoba ${room}`;
+    const text =
+`${host.name} meghívót küldött az ÜGYNÖKSÉGHEZ!
+Kattints a linkre, válassz karaktert és indulhat a nyomozás:
+${joinLink}
+
+Ha nem te vártad ezt a levelet, nyugodtan hagyd figyelmen kívül.`;
+
+    const html =
+`<div style="font-family:Arial,Helvetica,sans-serif; line-height:1.45;">
+  <p><b>${escapeHtml(host.name)}</b> meghívót küldött az <b>ÜGYNÖKSÉGHEZ</b>!</p>
+  <p>Kattints a linkre, válassz karaktert és indulhat a nyomozás:</p>
+  <p><a href="${joinLink}">${joinLink}</a></p>
+  <p style="opacity:.75; font-size:12px;">Ha nem te vártad ezt a levelet, nyugodtan hagyd figyelmen kívül.</p>
+</div>`;
+
+    const transporter = nodemailer.createTransport({
+      host: SMTP_HOST,
+      port: SMTP_PORT,
+      secure: SMTP_SECURE,
+      auth: { user: SMTP_USER, pass: SMTP_PASS }
+    });
+
+    const results = [];
+    for(const to of emails){
+      // simple validate
+      if(!/.+@.+\..+/.test(to)) continue;
+      const info = await transporter.sendMail({
+        from: SMTP_FROM,
+        to,
+        subject,
+        text,
+        html
+      });
+      results.push({ to, messageId: info && info.messageId ? info.messageId : null });
+    }
+
+    return res.json({ ok:true, sent: results.length });
+  }catch(e){
+    console.error(e);
+    return res.status(500).json({ error: 'Szerver hiba e-mail küldés közben.' });
+  }
+});
+us(400).json({ error: out.error });
     return res.json({ room, token: out.token });
   }catch(e){
     console.error(e);
