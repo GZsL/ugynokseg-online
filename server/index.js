@@ -201,12 +201,26 @@ app.post('/api/join-room', (req, res) => {
     const name = String(b.name||'').trim();
     const characterKey = String(b.characterKey||'').trim();
     const password = (b.password!=null && String(b.password).trim()) ? String(b.password).trim() : null;
+
     if(!room) return res.status(400).json({ error: 'Adj meg szoba kódot.' });
     if(!name) return res.status(400).json({ error: 'Adj meg nevet.' });
     if(!characterKey) return res.status(400).json({ error: 'Válassz karaktert.' });
 
     const out = joinLobbyRoom({ roomCode: room, name, characterKey, password });
-    if(out.error) return res.stat
+    if(out && out.error){
+      return res.status(out.status || 400).json({ error: out.error });
+    }
+
+    return res.json({
+      room: out.code,
+      token: out.token,
+      lobbyUrl: `/lobby.html?room=${encodeURIComponent(out.code)}&token=${encodeURIComponent(out.token)}`
+    });
+  }catch(e){
+    console.error(e);
+    return res.status(500).json({ error: 'Szerver hiba a csatlakozáskor.' });
+  }
+});
 
 // NEW: send invite email(s) (host only)
 app.post('/api/send-invite', async (req, res) => {
@@ -223,9 +237,9 @@ app.post('/api/send-invite', async (req, res) => {
     const r = rooms.get(room);
     if(!r) return res.status(404).json({ error: 'Szoba nem található.' });
 
-    const host = (r.players||[]).find(p => p && p.token === token);
-    if(!host) return res.status(403).json({ error: 'Érvénytelen token ehhez a szobához.' });
-    if(!host.isHost) return res.status(403).json({ error: 'Csak a host küldhet meghívót.' });
+    const hostPlayer = (r.players||[]).find(p => p && p.token === token);
+    if(!hostPlayer) return res.status(403).json({ error: 'Érvénytelen token ehhez a szobához.' });
+    if(!hostPlayer.isHost) return res.status(403).json({ error: 'Csak a host küldhet meghívót.' });
 
     const SMTP_HOST = process.env.SMTP_HOST;
     const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587', 10);
@@ -240,26 +254,23 @@ app.post('/api/send-invite', async (req, res) => {
       });
     }
 
-    const proto = req.get('x-forwarded-proto') || req.protocol || 'https';
+    // Build absolute join link (Render + proxies safe)
+    const proto = (req.get('x-forwarded-proto') || req.protocol || 'https');
     const hostHeader = req.get('x-forwarded-host') || req.get('host');
-    const baseUrl = `${proto}://${hostHeader}`;
-    const joinLink = `${baseUrl}/join.html?room=${encodeURIComponent(room)}`;
+    const base = `${proto}://${hostHeader}`;
+    const joinLink = `${base}/join.html?room=${encodeURIComponent(room)}`;
 
-    const subject = `Meghívó az ÜGYNÖKSÉGHEZ – szoba ${room}`;
-    const text =
-`${host.name} meghívót küldött az ÜGYNÖKSÉGHEZ!
-Kattints a linkre, válassz karaktert és indulhat a nyomozás:
-${joinLink}
-
-Ha nem te vártad ezt a levelet, nyugodtan hagyd figyelmen kívül.`;
-
-    const html =
-`<div style="font-family:Arial,Helvetica,sans-serif; line-height:1.45;">
-  <p><b>${escapeHtml(host.name)}</b> meghívót küldött az <b>ÜGYNÖKSÉGHEZ</b>!</p>
-  <p>Kattints a linkre, válassz karaktert és indulhat a nyomozás:</p>
-  <p><a href="${joinLink}">${joinLink}</a></p>
-  <p style="opacity:.75; font-size:12px;">Ha nem te vártad ezt a levelet, nyugodtan hagyd figyelmen kívül.</p>
-</div>`;
+    const subject = `Meghívó: Ügynökség – Szobakód: ${room}`;
+    const text = `${hostPlayer.name} meghívót küldött az ÜGYNÖKSÉGHEZ!\n\nKattints a linkre, válassz karaktert és indulhat a nyomozás:\n${joinLink}\n\nSzobakód: ${room}`;
+    const html = `
+      <div style="font-family:Arial,Helvetica,sans-serif; line-height:1.45;">
+        <p><b>${escapeHtml(hostPlayer.name)}</b> meghívót küldött az <b>ÜGYNÖKSÉGHEZ</b>!</p>
+        <p>Kattints a linkre, válassz karaktert és indulhat a nyomozás:</p>
+        <p><a href="${joinLink}">${joinLink}</a></p>
+        <p><b>Szobakód:</b> ${escapeHtml(room)}</p>
+        <p style="opacity:.75; font-size:12px;">Ha nem te vártad ezt a levelet, nyugodtan hagyd figyelmen kívül.</p>
+      </div>
+    `;
 
     const transporter = nodemailer.createTransport({
       host: SMTP_HOST,
@@ -270,32 +281,31 @@ Ha nem te vártad ezt a levelet, nyugodtan hagyd figyelmen kívül.`;
 
     const results = [];
     for(const to of emails){
-      // simple validate
-      if(!/.+@.+\..+/.test(to)) continue;
-      const info = await transporter.sendMail({
-        from: SMTP_FROM,
-        to,
-        subject,
-        text,
-        html
-      });
-      results.push({ to, messageId: info && info.messageId ? info.messageId : null });
+      if(!/^.+@.+\..+$/.test(to)){
+        results.push({ to, ok:false, error:'invalid_email' });
+        continue;
+      }
+      try{
+        const info = await transporter.sendMail({
+          from: SMTP_FROM,
+          to,
+          subject,
+          text,
+          html
+        });
+        results.push({ to, ok:true, messageId: info && info.messageId ? info.messageId : null });
+      }catch(err){
+        console.error('sendMail error', to, err && err.message ? err.message : err);
+        results.push({ to, ok:false, error:'send_failed' });
+      }
     }
 
-    return res.json({ ok:true, sent: results.length });
+    return res.json({ ok:true, results });
   }catch(e){
     console.error(e);
     return res.status(500).json({ error: 'Szerver hiba e-mail küldés közben.' });
   }
 });
-return res.status(400).json({ error: out.error });
-    return res.json({ room, token: out.token });
-  }catch(e){
-    console.error(e);
-    return res.status(500).json({ error: 'Szerver hiba a csatlakozáskor.' });
-  }
-});
-
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: true, methods: ['GET','POST'] }
