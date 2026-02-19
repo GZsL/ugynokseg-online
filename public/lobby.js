@@ -17,7 +17,8 @@ if(!ROOM || !TOKEN){
 }
 
 const roomCodeEl = document.getElementById('roomCode');
-const inviteEl = document.getElementById('invite');
+const copyInviteBtn = document.getElementById('copyInviteBtn');
+const copyHint = document.getElementById('copyHint');
 const statusEl = document.getElementById('status');
 const playersEl = document.getElementById('players');
 const readyBtn = document.getElementById('readyBtn');
@@ -25,8 +26,24 @@ const startBtn = document.getElementById('startBtn');
 const hint2 = document.getElementById('hint2');
 
 roomCodeEl.textContent = ROOM;
-inviteEl.value = `${location.origin}/join.html?room=${encodeURIComponent(ROOM)}`;
+const inviteLink = `${location.origin}/join.html?room=${encodeURIComponent(ROOM)}`;
 
+
+// Meghívó link másolása gomb
+if(copyInviteBtn){
+  copyInviteBtn.addEventListener('click', async () => {
+    try{
+      await navigator.clipboard.writeText(inviteLink);
+      if(copyHint){
+        copyHint.style.display = 'block';
+        setTimeout(()=>{ copyHint.style.display='none'; }, 1200);
+      }
+    }catch(e){
+      // fallback: prompt
+      window.prompt("Másold ki a meghívó linket:", inviteLink);
+    }
+  });
+}
 let lobby = null;
 let socket = null;
 

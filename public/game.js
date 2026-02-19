@@ -228,11 +228,14 @@ function renderHeader(){
           ].map(([t,v])=>`
             <div style="width:180px; height:96px; background:var(--theme-color); color:#fff; border-radius:12px; padding:10px 12px; box-sizing:border-box;">
               <div style="font-size:18px; color:rgba(255,255,255,.65); font-weight:700; display:flex; align-items:center; justify-content:space-between;">
-                <span>${t}</span>${t==="Fix tárgyak" ? `<button class="btn btn-inverse" id="rulesBtn" style="height:28px; padding:0 10px; border-radius:10px; font-weight:900; font-size:12px;">Játék menete</button>` : ``}
+                <span>${t}</span>
               </div>
               <div style="font-size:45px; font-weight:900;">${v}</div>
             </div>
           `).join("")}
+          <div style="display:flex; align-items:flex-end; height:96px;">
+            <button class="btn btn-inverse" id="rulesBtn" style="height:40px; padding:0 16px; border-radius:12px; font-weight:900; font-size:14px; color:#282828; background:#fff;">Játék menete</button>
+          </div>
         </div>
       </div>
 
@@ -730,7 +733,7 @@ function renderPlayersBar(){
             <div class="pmcName" style="${fg?`color:${fg};`:""}">${escapeHtml(pl.name || ("Ügynök "+(i+1)))}</div>
             <div class="pmcChar" style="${fg?`color:${fg}; opacity:.85;`:""}">${escapeHtml(pl.characterName || pl.characterKey || "")}</div>
           </div>
-          <div class="pmcLevel" style="${fg?`color:${fg};`:""}">${Number.isFinite(pl.agentLevel) ? pl.agentLevel : ""}</div>
+          <div class="pmcLevel" style="${isActive ? `color:#282828;` : (fg?`color:${fg};`:"")}">${Number.isFinite(pl.agentLevel) ? pl.agentLevel : ""}</div>
         </div>
 
         <div class="pmcStats" style="${fg?`color:${fg};`:""}">

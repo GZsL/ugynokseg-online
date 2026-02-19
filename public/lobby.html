@@ -24,7 +24,7 @@
     .mini{ font-size:12px; opacity:.85; }
     input[type="text"]{ width:100%; padding:10px 12px; border-radius:12px; border:0; outline:none; }
     /* Start gomb: fehér háttér + sötét szöveg */
-    #startBtn{ color:#282828; }
+    #startBtn{ color:#282828 !important; }
   </style>
 </head>
 <body>
@@ -37,9 +37,12 @@
         <div class="box" style="flex:1; min-width:280px;">
           <div class="mini">Szobakód</div>
           <div id="roomCode" class="code">—</div>
-          <div style="margin-top:10px;" class="mini">Meghívó link (másolható)</div>
-          <input id="invite" type="text" readonly value="" onclick="this.select()" />
-        </div>
+                    <div style="margin-top:10px;" class="mini">Meghívó link</div>
+          <button id="copyInviteBtn" class="btn btn-inverse" style="width:100%; margin-top:6px; color:#282828; background:#fff;">
+            Meghívó link másolása
+          </button>
+          <div id="copyHint" class="mini" style="margin-top:6px; opacity:.75; display:none;">Másolva ✅</div>
+</div>
 
         <div class="box" style="flex:1; min-width:280px;">
           <div class="mini">Státusz</div>
