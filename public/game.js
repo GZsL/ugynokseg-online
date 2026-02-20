@@ -46,6 +46,43 @@ const IS_ONLINE = !!ROOM;
 
 let socket = null;
 
+// --- SFX state tracking (online + offline) ---
+function _getMeFrom(st){
+  try{
+    const idx = (typeof PLAYER_INDEX === 'number') ? PLAYER_INDEX : 0;
+    const arr = (st && st.players) ? st.players : [];
+    return arr[Math.min(idx, Math.max(0, arr.length-1))] || null;
+  }catch(e){ return null; }
+}
+function _handleSfxStateChange(prev, next){
+  try{
+    if(!window.AudioManager) return;
+    const pm = _getMeFrom(prev);
+    const nm = _getMeFrom(next);
+
+    const prevMyTurn = (prev && typeof prev.currentPlayerIndex==='number') ? (PLAYER_INDEX === prev.currentPlayerIndex) : null;
+    const nextMyTurn = (next && typeof next.currentPlayerIndex==='number') ? (PLAYER_INDEX === next.currentPlayerIndex) : null;
+
+    // Turn start: play gong + flag flash
+    if(prevMyTurn === false && nextMyTurn === true){
+      window.AudioManager.play('turn');
+      ui._turnFlashTs = Date.now();
+    }
+
+    const prevSolved = pm ? (pm.solvedCases||[]).length : null;
+    const nextSolved = nm ? (nm.solvedCases||[]).length : null;
+    if(prevSolved != null && nextSolved != null && nextSolved > prevSolved){
+      window.AudioManager.play('success');
+    }
+
+    const prevCap = pm ? (pm.capturedThieves||[]).length : null;
+    const nextCap = nm ? (nm.capturedThieves||[]).length : null;
+    if(prevCap != null && nextCap != null && nextCap > prevCap){
+      window.AudioManager.play('siren');
+    }
+  }catch(e){}
+}
+
 // --- Chat (ephemeral) ---
 const chatState = { messages: [] }; // keep last ~80
 
@@ -104,7 +141,9 @@ function attachSocket(){
     socket = io({ query });
 
     socket.on('state', (s) => {
+      const _prev = state;
       state = s;
+      _handleSfxStateChange(_prev, state);
       // Token-based mode: server tells us who we are.
       if(state && typeof state._meIndex === 'number') PLAYER_INDEX = state._meIndex;
       try{ if(typeof saveState==="function") saveState(state); }catch(e){}
@@ -201,7 +240,9 @@ function canActNow(){
 }
 
 function commit(next){
+  const _prev = state;
   state = next;
+  _handleSfxStateChange(_prev, state);
   if(window.Engine && typeof window.Engine.captureIfPossible === "function"){
     state = window.Engine.captureIfPossible(state);
   }
@@ -226,11 +267,7 @@ function renderHeader(){
   const palette = (typeof THEME_COLORS !== "undefined" ? THEME_COLORS : (window.THEME_COLORS||{}));
   const theme = palette[p.characterKey] || "#f8bd01";
 
-  const turnBadge = IS_ONLINE
-    ? `<div style="position:absolute; top:14px; right:18px; font-weight:900; font-size:12px; opacity:.85;">
-         ${isMyTurn() ? "TE VAGY SORON" : `AKTUÁLIS: Ügynök ${turnIndex()+1}`}
-       </div>`
-    : ``;
+  const turnBadge = ``;
 
   hdr.innerHTML = `
     <div style="display:flex; gap:24px; height:100%; position:relative;">
@@ -252,8 +289,9 @@ function renderHeader(){
 
       <div style="flex:1; display:flex; flex-direction:column; justify-content:space-between; padding-top:30px; position:relative;">
         <div>
-          <div id="agentName" style="font-size:34px; font-weight:900; text-transform:uppercase; margin-top:0;">
+          <div id="agentName" style="font-size:34px; font-weight:900; text-transform:uppercase; margin-top:0; display:flex; align-items:center;">
             ${String(p.name||"").toUpperCase()}
+            ${isMyTurn() ? `<span id="turnIndicator" class="turn-indicator ${((ui._turnFlashTs && (Date.now()-ui._turnFlashTs)<1200) ? "turn-flash" : "")}" style="color:${theme};">TE VAGY SORON</span>` : ``}
           </div>
           <div style="color:rgba(255,255,255,.7); margin-top:65px; font-size:14px; line-height:1.2;">
             ${p.advantage||""}
@@ -285,7 +323,7 @@ function renderHeader(){
             </div>
           `).join("")}
           <div style="display:flex; align-items:flex-end; height:96px;">
-            <button class="btn btn-inverse" id="rulesBtn" style="height:40px; padding:0 16px; border-radius:12px; font-weight:900; font-size:14px; color:#282828; background:#fff;">Játék menete</button>
+            <button class="btn btn-inverse" id="rulesBtn" style="height:40px; padding:0 16px; border-radius:12px; font-weight:900; font-size:14px; color:${theme}; background:#fff; border:2px solid ${theme};">Játék menete</button>
           </div>
         </div>
       </div>
@@ -361,7 +399,9 @@ function renderDecks(){
     if(d){
       d.onclick = ()=>{
         if(!canActNow()) return;
-        if(IS_ONLINE){ sendAction('PRE_DRAW'); resetUseSelections(); return; }
+        if(IS_ONLINE){ window.AudioManager && window.AudioManager.play('draw');
+        sendAction('PRE_DRAW'); resetUseSelections(); return; }
+        window.AudioManager && window.AudioManager.play('draw');
         const r = window.Engine.doPreDraw(state);
         commit(r.next);
       };
@@ -440,7 +480,9 @@ function renderRoll(){
   if(btn){
     btn.onclick = ()=>{
       if(!canActNow()) return;
-      if(IS_ONLINE){ sendAction('ROLL'); resetUseSelections(); return; }
+      if(IS_ONLINE){ window.AudioManager && window.AudioManager.play('dice');
+        sendAction('ROLL'); resetUseSelections(); return; }
+      window.AudioManager && window.AudioManager.play('dice');
       const r = window.Engine.doRollAndDraw(state);
       commit(r.next);
     };
@@ -1020,9 +1062,11 @@ function render(){
     passBtn.onclick = ()=>{
       if(IS_ONLINE){
         if(!canActNow()) return;
+        window.AudioManager && window.AudioManager.play('pass');
         sendAction('PASS');
         return;
       }
+      window.AudioManager && window.AudioManager.play('pass');
       const res = window.Engine.beginPassToEndTurn(state);
       commit(res.next);
       if(res.log) setStatus(res.log);
