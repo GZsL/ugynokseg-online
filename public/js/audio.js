@@ -6,7 +6,7 @@ window.AudioManager = (function(){
     pass:   '/assets/sfx/pass.mp3',
     success:'/assets/sfx/success.mp3',
     siren:  '/assets/sfx/siren.mp3',
-    turn:   '/assets/sfx/turn.mp3'
+    turn:   '/assets/sfx/turn.mp3',
     winner: '/assets/sfx/winner.mp3',
   };
 
