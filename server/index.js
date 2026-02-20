@@ -4,12 +4,15 @@ const express = require('express');
 const { Server } = require('socket.io');
 const Engine = require('./engine-core');
 const nodemailer = require('nodemailer');
+const cookieParser = require("cookie-parser");
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
+app.use(cookieParser());
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 app.use(express.static(PUBLIC_DIR));
+app.use("/api/auth", require("./auth.routes"));
 
 // Default entry
 app.get('/', (req,res)=>{
