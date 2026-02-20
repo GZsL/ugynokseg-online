@@ -7,6 +7,7 @@ window.AudioManager = (function(){
     success:'/assets/sfx/success.mp3',
     siren:  '/assets/sfx/siren.mp3',
     turn:   '/assets/sfx/turn.mp3'
+    winner: '/assets/sfx/winner.mp3',
   };
 
   const bank = {};

@@ -1000,7 +1000,21 @@ function showWinModal(playerName){
     if(!col) col = "#2b2b2b";
     card.style.background = col;
   }
-  modal.style.display = "flex";
+// winner sound (csak egyszer)
+if (!window.__winnerSoundPlayed) window.__winnerSoundPlayed = false;
+if (!window.__winnerSoundPlayed) {
+  if (window.AudioManager && typeof AudioManager.play === "function") {
+    AudioManager.play("winner");
+  }
+  window.__winnerSoundPlayed = true;
+}
+ modal.style.display = "flex";
+
+// winner sound
+if (window.AudioManager && typeof AudioManager.play === "function") {
+  AudioManager.play("winner");
+}
+
 }
 function hideWinModal(){
   const modal = document.getElementById("winModal");
