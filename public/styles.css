@@ -372,3 +372,112 @@ a{color:inherit; text-decoration:none;}
 
 /* Lobby START gomb szöveg színe */
 #startBtn{ color:#282828 !important; }
+
+/* ==========================
+   Room Chat (ephemeral)
+   ========================== */
+.chat-panel{
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  width: 320px;
+  max-width: calc(100vw - 40px);
+  background: rgba(30,30,30,0.96);
+  border: 2px solid rgba(255,255,255,0.10);
+  border-radius: 12px;
+  overflow: hidden;
+  z-index: 9999;
+}
+.chat-header{
+  padding: 10px 12px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  color: #e9e9e9;
+  background: rgba(0,0,0,0.25);
+}
+.chat-log{
+  height: 210px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.25;
+}
+.chat-line{ margin: 0 0 8px 0; }
+.chat-line .chat-name{ font-weight: 800; }
+.chat-line.system{ opacity: 0.75; font-style: italic; }
+
+.chat-input-row{
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  background: rgba(0,0,0,0.18);
+}
+.chat-input{
+  flex: 1;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: 2px solid rgba(255,255,255,0.10);
+  background: rgba(0,0,0,0.25);
+  color: #f1f1f1;
+  outline: none;
+}
+.chat-input::placeholder{ color: rgba(255,255,255,0.55); }
+
+/* override the global .btn white text for this button */
+.btn.chat-send{
+  height: 36px;
+  padding: 0 14px;
+  background: #fff;
+  color: #282828 !important;
+  border-radius: 10px;
+  font-weight: 900;
+  letter-spacing: 0.5px;
+}
+
+
+/* ================================
+   UI FIXES (Lobby invite modal + Turn indicator)
+   ================================ */
+
+/* Lobby invite modal: prevent textarea overflow */
+.modalCard{
+  box-sizing:border-box;
+  width:min(520px, 92vw);
+  max-width:92vw;
+  overflow:hidden;
+}
+.modalTextarea{
+  width:100%;
+  max-width:100%;
+  box-sizing:border-box;
+  display:block;
+  resize:vertical;
+}
+
+/* Turn indicator near player name */
+.turn-indicator{
+  font-weight:1000;
+  font-size:12px;
+  letter-spacing:.06em;
+  text-transform:uppercase;
+  margin-left:12px;
+  padding:4px 10px;
+  border-radius:8px;
+  background:rgba(255,255,255,.14);
+}
+.turn-flash{
+  animation: turnFlash 0.6s ease-in-out 2;
+}
+@keyframes turnFlash{
+  0%{ opacity:1; transform:scale(1); }
+  50%{ opacity:.35; transform:scale(1.06); }
+  100%{ opacity:1; transform:scale(1); }
+}
+
+/* Row1 - Játék menete gomb felirat fix */
+#rulesBtn{
+  color: var(--theme-color) !important;     /* <- karakter szín */
+  background: #fff !important;             /* fehér alap maradhat */
+  border: 2px solid var(--theme-color) !important;
+}

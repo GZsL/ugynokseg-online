@@ -45,6 +45,90 @@ let PLAYER_INDEX = Math.max(0, parseInt(params.get('player') || '0', 10) || 0);
 const IS_ONLINE = !!ROOM;
 
 let socket = null;
+
+// --- SFX state tracking (online + offline) ---
+function _getMeFrom(st){
+  try{
+    const idx = (typeof PLAYER_INDEX === 'number') ? PLAYER_INDEX : 0;
+    const arr = (st && st.players) ? st.players : [];
+    return arr[Math.min(idx, Math.max(0, arr.length-1))] || null;
+  }catch(e){ return null; }
+}
+function _handleSfxStateChange(prev, next){
+  try{
+    if(!window.AudioManager) return;
+    const pm = _getMeFrom(prev);
+    const nm = _getMeFrom(next);
+
+    const prevMyTurn = (prev && typeof prev.currentPlayerIndex==='number') ? (PLAYER_INDEX === prev.currentPlayerIndex) : null;
+    const nextMyTurn = (next && typeof next.currentPlayerIndex==='number') ? (PLAYER_INDEX === next.currentPlayerIndex) : null;
+
+    // Turn start: play gong + flag flash
+    if(prevMyTurn === false && nextMyTurn === true){
+      window.AudioManager.play('turn');
+      ui._turnFlashTs = Date.now();
+    }
+
+    const prevSolved = pm ? (pm.solvedCases||[]).length : null;
+    const nextSolved = nm ? (nm.solvedCases||[]).length : null;
+    if(prevSolved != null && nextSolved != null && nextSolved > prevSolved){
+      window.AudioManager.play('success');
+    }
+
+    const prevCap = pm ? (pm.capturedThieves||[]).length : null;
+    const nextCap = nm ? (nm.capturedThieves||[]).length : null;
+    if(prevCap != null && nextCap != null && nextCap > prevCap){
+      window.AudioManager.play('siren');
+    }
+  }catch(e){}
+}
+
+// --- Chat (ephemeral) ---
+const chatState = { messages: [] }; // keep last ~80
+
+function addChatMessage(m){
+  chatState.messages.push(m);
+  if(chatState.messages.length > 80) chatState.messages.shift();
+  renderChat();
+}
+
+function renderChat(){
+  const log = document.getElementById('chatLog');
+  if(!log) return;
+  log.innerHTML = chatState.messages.map(m => {
+    const ts = m.ts ? new Date(m.ts) : null;
+    const t = ts ? ts.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '';
+    if(m.type === 'system'){
+      return `<div class="chat-line system">${escapeHtml(t ? `[${t}] ` : '')}${escapeHtml(m.text||'')}</div>`;
+    }
+    const name = m.name || 'Játékos';
+    return `<div class="chat-line"><span class="chat-name">${escapeHtml(name)}:</span> ${escapeHtml(m.text||'')} <span style="opacity:.55; font-size:11px;">${escapeHtml(t)}</span></div>`;
+  }).join('');
+  log.scrollTop = log.scrollHeight;
+}
+
+function initChatUI(){
+  const input = document.getElementById('chatInput');
+  const send = document.getElementById('chatSend');
+  if(!input || !send) return;
+
+  const doSend = () => {
+    const text = String(input.value||'').trim();
+    if(!text) return;
+    if(!socket) return;
+    socket.emit('chat', { text });
+    input.value = '';
+    input.focus();
+  };
+
+  send.addEventListener('click', doSend);
+  input.addEventListener('keydown', (e) => {
+    if(e.key === 'Enter'){
+      e.preventDefault();
+      doSend();
+    }
+  });
+}
 function sendAction(type, payload){
   if(!socket) return;
   socket.emit('action', { type, payload: payload || {} });
@@ -57,7 +141,9 @@ function attachSocket(){
     socket = io({ query });
 
     socket.on('state', (s) => {
+      const _prev = state;
       state = s;
+      _handleSfxStateChange(_prev, state);
       // Token-based mode: server tells us who we are.
       if(state && typeof state._meIndex === 'number') PLAYER_INDEX = state._meIndex;
       try{ if(typeof saveState==="function") saveState(state); }catch(e){}
@@ -68,6 +154,10 @@ function attachSocket(){
       if(typeof toast === "function") toast(String(t));
       // keep a last status too
       ui.statusMsg = String(t || "");
+    });
+
+    socket.on('chat', (m) => {
+      addChatMessage(m || {});
     });
 
     socket.on('connect_error', (err) => {
@@ -150,7 +240,9 @@ function canActNow(){
 }
 
 function commit(next){
+  const _prev = state;
   state = next;
+  _handleSfxStateChange(_prev, state);
   if(window.Engine && typeof window.Engine.captureIfPossible === "function"){
     state = window.Engine.captureIfPossible(state);
   }
@@ -175,11 +267,7 @@ function renderHeader(){
   const palette = (typeof THEME_COLORS !== "undefined" ? THEME_COLORS : (window.THEME_COLORS||{}));
   const theme = palette[p.characterKey] || "#f8bd01";
 
-  const turnBadge = IS_ONLINE
-    ? `<div style="position:absolute; top:14px; right:18px; font-weight:900; font-size:12px; opacity:.85;">
-         ${isMyTurn() ? "TE VAGY SORON" : `AKTUÁLIS: Ügynök ${turnIndex()+1}`}
-       </div>`
-    : ``;
+  const turnBadge = ``;
 
   hdr.innerHTML = `
     <div style="display:flex; gap:24px; height:100%; position:relative;">
@@ -201,8 +289,9 @@ function renderHeader(){
 
       <div style="flex:1; display:flex; flex-direction:column; justify-content:space-between; padding-top:30px; position:relative;">
         <div>
-          <div id="agentName" style="font-size:34px; font-weight:900; text-transform:uppercase; margin-top:0;">
+          <div id="agentName" style="font-size:34px; font-weight:900; text-transform:uppercase; margin-top:0; display:flex; align-items:center;">
             ${String(p.name||"").toUpperCase()}
+            ${isMyTurn() ? `<span id="turnIndicator" class="turn-indicator ${((ui._turnFlashTs && (Date.now()-ui._turnFlashTs)<1200) ? "turn-flash" : "")}" style="color:${theme};">TE VAGY SORON</span>` : ``}
           </div>
           <div style="color:rgba(255,255,255,.7); margin-top:65px; font-size:14px; line-height:1.2;">
             ${p.advantage||""}
@@ -234,7 +323,7 @@ function renderHeader(){
             </div>
           `).join("")}
           <div style="display:flex; align-items:flex-end; height:96px;">
-            <button class="btn btn-inverse" id="rulesBtn" style="height:40px; padding:0 16px; border-radius:12px; font-weight:900; font-size:14px; color:#282828; background:#fff;">Játék menete</button>
+            <button class="btn btn-inverse" id="rulesBtn" style="height:40px; padding:0 16px; border-radius:12px; font-weight:900; font-size:14px; color:${theme}; background:#fff; border:2px solid ${theme};">Játék menete</button>
           </div>
         </div>
       </div>
@@ -310,7 +399,9 @@ function renderDecks(){
     if(d){
       d.onclick = ()=>{
         if(!canActNow()) return;
-        if(IS_ONLINE){ sendAction('PRE_DRAW'); resetUseSelections(); return; }
+        if(IS_ONLINE){ window.AudioManager && window.AudioManager.play('draw');
+        sendAction('PRE_DRAW'); resetUseSelections(); return; }
+        window.AudioManager && window.AudioManager.play('draw');
         const r = window.Engine.doPreDraw(state);
         commit(r.next);
       };
@@ -389,7 +480,9 @@ function renderRoll(){
   if(btn){
     btn.onclick = ()=>{
       if(!canActNow()) return;
-      if(IS_ONLINE){ sendAction('ROLL'); resetUseSelections(); return; }
+      if(IS_ONLINE){ window.AudioManager && window.AudioManager.play('dice');
+        sendAction('ROLL'); resetUseSelections(); return; }
+      window.AudioManager && window.AudioManager.play('dice');
       const r = window.Engine.doRollAndDraw(state);
       commit(r.next);
     };
@@ -907,7 +1000,21 @@ function showWinModal(playerName){
     if(!col) col = "#2b2b2b";
     card.style.background = col;
   }
-  modal.style.display = "flex";
+// winner sound (csak egyszer)
+if (!window.__winnerSoundPlayed) window.__winnerSoundPlayed = false;
+if (!window.__winnerSoundPlayed) {
+  if (window.AudioManager && typeof AudioManager.play === "function") {
+    AudioManager.play("winner");
+  }
+  window.__winnerSoundPlayed = true;
+}
+ modal.style.display = "flex";
+
+// winner sound
+if (window.AudioManager && typeof AudioManager.play === "function") {
+  AudioManager.play("winner");
+}
+
 }
 function hideWinModal(){
   const modal = document.getElementById("winModal");
@@ -969,9 +1076,11 @@ function render(){
     passBtn.onclick = ()=>{
       if(IS_ONLINE){
         if(!canActNow()) return;
+        window.AudioManager && window.AudioManager.play('pass');
         sendAction('PASS');
         return;
       }
+      window.AudioManager && window.AudioManager.play('pass');
       const res = window.Engine.beginPassToEndTurn(state);
       commit(res.next);
       if(res.log) setStatus(res.log);
@@ -1024,6 +1133,7 @@ attachSocket();
 render();
 
 document.addEventListener("DOMContentLoaded", ()=>{
+  initChatUI();
   const ok = document.getElementById("winModalOk");
   if(ok) ok.onclick = hideWinModal;
 

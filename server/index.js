@@ -489,6 +489,18 @@ io.on('connection', (socket) => {
     socket.emit('state', stateForPlayer(r.state, playerIndex));
   }
 
+  // --- CHAT (ephemeral): announce join (no persistence) ---
+  try{
+    if(r.players && r.players[playerIndex]){
+      const was = !!r.players[playerIndex]._wasConnected;
+      r.players[playerIndex]._wasConnected = true;
+      if(!was){
+        const nm = r.players[playerIndex].name || `Játékos ${playerIndex+1}`;
+        io.to(roomCode).emit('chat', { type:'system', text:`${nm} csatlakozott.`, ts: Date.now() });
+      }
+    }
+  }catch(e){ /* ignore */ }
+
   socket.on('action', (msg) => {
     try{
       const code = socket.data.roomCode;
@@ -558,6 +570,28 @@ setRoomState(code, next);
     }
   });
 
+  // --- CHAT (ephemeral): room chat messages ---
+  socket.on('chat', (msg) => {
+    try{
+      const code = socket.data.roomCode;
+      const idx = socket.data.playerIndex;
+      if(!code) return;
+      const r = rooms.get(code);
+      if(!r) return;
+
+      const text = String((msg && msg.text) ? msg.text : '').trim();
+      if(!text) return;
+      const safe = text.slice(0, 200);
+
+      const p = (r.players||[])[idx] || {};
+      const name = String(p.name || `Játékos ${idx+1}`);
+
+      io.to(code).emit('chat', { type:'user', name, playerIndex: idx, text: safe, ts: Date.now() });
+    }catch(e){
+      // ignore
+    }
+  });
+
   socket.on('disconnect', () => {
     try{
       const code = socket.data.roomCode;
@@ -565,6 +599,11 @@ setRoomState(code, next);
       const r3 = rooms.get(code);
       if(r3 && r3.players && r3.players[idx]){
         r3.players[idx].connected = false;
+        r3.players[idx]._wasConnected = false;
+        try{
+          const nm = r3.players[idx].name || `Játékos ${idx+1}`;
+          io.to(code).emit('chat', { type:'system', text:`${nm} kilépett.`, ts: Date.now() });
+        }catch(e){ /* ignore */ }
         io.to(code).emit('lobby', lobbySnapshot(code));
       }
     }catch(e){

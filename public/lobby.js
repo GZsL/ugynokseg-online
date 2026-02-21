@@ -139,6 +139,53 @@ if(copyInviteBtn){
 let lobby = null;
 let socket = null;
 
+// --- Chat (ephemeral) ---
+const chatState = { messages: [] }; // keep last ~80
+
+function addChatMessage(m){
+  chatState.messages.push(m);
+  if(chatState.messages.length > 80) chatState.messages.shift();
+  renderChat();
+}
+
+function renderChat(){
+  const log = document.getElementById('chatLog');
+  if(!log) return;
+  log.innerHTML = chatState.messages.map(m => {
+    const ts = m.ts ? new Date(m.ts) : null;
+    const t = ts ? ts.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '';
+    if(m.type === 'system'){
+      return `<div class="chat-line system">${escapeHtml(t ? `[${t}] ` : '')}${escapeHtml(m.text||'')}</div>`;
+    }
+    const name = m.name || 'Játékos';
+    return `<div class="chat-line"><span class="chat-name">${escapeHtml(name)}:</span> ${escapeHtml(m.text||'')} <span style="opacity:.55; font-size:11px;">${escapeHtml(t)}</span></div>`;
+  }).join('');
+  log.scrollTop = log.scrollHeight;
+}
+
+function initChatUI(){
+  const input = document.getElementById('chatInput');
+  const send = document.getElementById('chatSend');
+  if(!input || !send) return;
+
+  const doSend = () => {
+    const text = String(input.value||'').trim();
+    if(!text) return;
+    if(!socket) return;
+    socket.emit('chat', { text });
+    input.value = '';
+    input.focus();
+  };
+
+  send.addEventListener('click', doSend);
+  input.addEventListener('keydown', (e) => {
+    if(e.key === 'Enter'){
+      e.preventDefault();
+      doSend();
+    }
+  });
+}
+
 function myPlayer(){
   if(!lobby || !lobby.players) return null;
   // token alapján a szerver oldalon az index fix, de a lobby snapshot nem küldi tokeneket.
@@ -210,6 +257,10 @@ function connect(){
     if(typeof toast==='function') toast(String(t));
   });
 
+  socket.on('chat', (m)=>{
+    addChatMessage(m||{});
+  });
+
   socket.on('connect_error', ()=>{
     statusEl.textContent = 'Kapcsolati hiba';
   });
@@ -225,4 +276,5 @@ startBtn.onclick = ()=>{
 };
 
 render();
+initChatUI();
 connect();
