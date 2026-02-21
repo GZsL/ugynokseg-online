@@ -14,6 +14,8 @@ function escapeHtml(str){
 if(!ROOM || !TOKEN){
   alert('Hiányzik a room vagy token. Menj vissza és csatlakozz újra.');
   location.href = 'intro.html';
+  // Stop execution so we don't run with invalid params (prevents random UI/socket bugs).
+  throw new Error('Missing room/token');
 }
 
 const roomCodeEl = document.getElementById('roomCode');

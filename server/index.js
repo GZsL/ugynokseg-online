@@ -108,7 +108,8 @@ function joinLobbyRoom({ roomCode, name, characterKey, password=null }){
     connected: false
   });
 
-  return { token };
+  // Return roomCode too so API callers never accidentally use undefined.
+  return { code: roomCode, token };
 }
 
 function startGame(roomCode){
@@ -212,9 +213,9 @@ app.post('/api/join-room', (req, res) => {
     }
 
     return res.json({
-      room: out.code,
+      room: room,
       token: out.token,
-      lobbyUrl: `/lobby.html?room=${encodeURIComponent(out.code)}&token=${encodeURIComponent(out.token)}`
+      lobbyUrl: `/lobby.html?room=${encodeURIComponent(room)}&token=${encodeURIComponent(out.token)}`
     });
   }catch(e){
     console.error(e);

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="hu">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Regisztráció – Ügynökség</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="card" style="max-width:420px;margin:40px auto;padding:18px;">
+    <h2 style="margin:0 0 14px 0;">Regisztráció</h2>
+
+    <label>Név</label>
+    <input id="name" placeholder="Pl. Zsuzsi" style="width:100%;margin:6px 0 10px 0;" />
+
+    <label>Email</label>
+    <input id="email" placeholder="email@domain.hu" style="width:100%;margin:6px 0 10px 0;" />
+
+    <label>Jelszó</label>
+    <input id="password" type="password" placeholder="min. 6 karakter" style="width:100%;margin:6px 0 14px 0;" />
+
+    <button id="btn" class="btn" style="width:100%;">Regisztráció</button>
+
+    <div id="msg" style="margin-top:12px;min-height:18px;"></div>
+
+    <div style="margin-top:12px;opacity:.9;">
+      <a id="toLogin" href="login.html">Van már fiókod? Bejelentkezés</a>
+<script>
+  const next = new URLSearchParams(location.search).get("next");
+  if (next) document.getElementById("toLogin").href = "login.html?next=" + encodeURIComponent(next);
+</script>
+    </div>
+  </div>
+
+<script>
+  const msg = document.getElementById("msg");
+
+  document.getElementById("btn").addEventListener("click", async () => {
+    msg.textContent = "";
+
+    const payload = {
+      name: document.getElementById("name").value.trim(),
+      email: document.getElementById("email").value.trim(),
+      password: document.getElementById("password").value
+    };
+
+    const r = await fetch("/api/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      credentials: "include"
+    });
+
+    const j = await r.json();
+    if (!r.ok || j.error) {
+      msg.textContent = j.error || "Hiba történt.";
+      return;
+    }
+
+    msg.textContent = "Sikeres regisztráció ✅";
+    const next = new URLSearchParams(location.search).get("next") || "/host.html";
+    setTimeout(() => location.href = next, 400);
+  });
+</script>
+</body>
+</html>

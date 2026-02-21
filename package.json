@@ -8,8 +8,12 @@
     "start": "node server/index.js"
   },
   "dependencies": {
+    "bcrypt": "^6.0.0",
+    "better-sqlite3": "^12.6.2",
+    "cookie-parser": "^1.4.7",
     "express": "^4.19.2",
-    "socket.io": "^4.7.5",
-    "nodemailer": "^6.9.13"
+    "jsonwebtoken": "^9.0.3",
+    "nodemailer": "^6.9.13",
+    "socket.io": "^4.7.5"
   }
 }
