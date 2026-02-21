@@ -14,3 +14,8 @@ CREATE TABLE IF NOT EXISTS users (
 `);
 
 module.exports = db;
+
+// ✅ ELO / stats (MVP): add columns if missing
+try { db.prepare("ALTER TABLE users ADD COLUMN elo INTEGER NOT NULL DEFAULT 1000").run(); } catch(e) {}
+try { db.prepare("ALTER TABLE users ADD COLUMN wins INTEGER NOT NULL DEFAULT 0").run(); } catch(e) {}
+try { db.prepare("ALTER TABLE users ADD COLUMN losses INTEGER NOT NULL DEFAULT 0").run(); } catch(e) {}

@@ -4,114 +4,19 @@ const express = require('express');
 const { Server } = require('socket.io');
 const Engine = require('./engine-core');
 const nodemailer = require('nodemailer');
-const crypto = require('crypto');
+const cookieParser = require('cookie-parser');
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
+app.use(cookieParser());
 app.use(express.urlencoded({ extended: true }));
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 app.use(express.static(PUBLIC_DIR));
 
-/* =========================
-   AUTH (in-memory MVP)
-   Endpoints:
-   - POST /api/auth/register { name, email, password }
-   - POST /api/auth/login    { email, password }
-   - GET  /api/auth/leaderboard
-   Also alias: GET /api/leaderboard
-========================= */
+// ✅ Auth routes (register/login/logout/me/leaderboard)
+app.use('/api/auth', require('./auth.routes'));
 
-const usersByEmail = new Map(); // email -> user
-function normEmail(email){ return String(email||'').trim().toLowerCase(); }
-
-function uid(prefix='t'){
-  return prefix + '_' + Math.random().toString(16).slice(2) + '_' + Date.now().toString(16);
-}
-
-function hashPassword(password, salt){
-  // scrypt: slow enough for MVP, no extra deps
-  const buf = crypto.scryptSync(String(password||''), salt, 64);
-  return buf.toString('hex');
-}
-
-app.post('/api/auth/register', (req, res) => {
-  try{
-    const name = String((req.body && req.body.name) || '').trim();
-    const email = normEmail((req.body && req.body.email) || '');
-    const password = String((req.body && req.body.password) || '');
-
-    if(!name) return res.status(400).json({ error: 'Hiányzik a név.' });
-    if(!email || !email.includes('@')) return res.status(400).json({ error: 'Hibás email.' });
-    if(!password || password.length < 4) return res.status(400).json({ error: 'Túl rövid jelszó.' });
-
-    if(usersByEmail.has(email)){
-      return res.status(400).json({ error: 'Ez az email már regisztrálva van.' });
-    }
-
-    const salt = crypto.randomBytes(16).toString('hex');
-    const passHash = hashPassword(password, salt);
-
-    const user = {
-      id: uid('u'),
-      name,
-      email,
-      salt,
-      passHash,
-      elo: 1000,
-      wins: 0,
-      losses: 0,
-      createdAt: Date.now()
-    };
-
-    usersByEmail.set(email, user);
-    return res.json({ ok: true });
-  }catch(e){
-    console.error(e);
-    return res.status(500).json({ error: 'Szerver hiba regisztrációnál.' });
-  }
-});
-
-app.post('/api/auth/login', (req, res) => {
-  try{
-    const email = normEmail((req.body && req.body.email) || '');
-    const password = String((req.body && req.body.password) || '');
-
-    const user = usersByEmail.get(email);
-    if(!user) return res.status(400).json({ error: 'Hibás email vagy jelszó.' });
-
-    const passHash = hashPassword(password, user.salt);
-    if(passHash !== user.passHash){
-      return res.status(400).json({ error: 'Hibás email vagy jelszó.' });
-    }
-
-    // MVP: no JWT/session yet; client can store user in localStorage
-    return res.json({
-      ok: true,
-      user: { id: user.id, name: user.name, email: user.email, elo: user.elo, wins: user.wins, losses: user.losses }
-    });
-  }catch(e){
-    console.error(e);
-    return res.status(500).json({ error: 'Szerver hiba bejelentkezésnél.' });
-  }
-});
-
-app.get('/api/auth/leaderboard', (req, res) => {
-  const arr = Array.from(usersByEmail.values())
-    .sort((a,b) => (b.elo||0) - (a.elo||0))
-    .slice(0, 100)
-    .map(u => ({ name: u.name, elo: u.elo, wins: u.wins, losses: u.losses }));
-  return res.json(arr);
-});
-
-// alias for older client code
-app.get('/api/leaderboard', (req, res) => {
-  const arr = Array.from(usersByEmail.values())
-    .sort((a,b) => (b.elo||0) - (a.elo||0))
-    .slice(0, 100)
-    .map(u => ({ name: u.name, elo: u.elo, wins: u.wins, losses: u.losses }));
-  return res.json(arr);
-});
 
 // Default entry
 app.get('/', (req,res)=>{
@@ -132,6 +37,16 @@ app.get('/', (req,res)=>{
 /** @type {Map<string, any>} */
 const rooms = new Map();
 
+function requireAuth(req, res, next) {
+  // Auth cookie is handled in auth.routes.js; reuse /api/auth/me logic here by verifying JWT indirectly
+  // Simpler MVP: ask auth router via req.cookies. If no cookie -> 401.
+  const token = req.cookies && (req.cookies.ugynokseg_token || req.cookies['ugynokseg_token']);
+  if (!token) return res.status(401).json({ error: 'Nincs bejelentkezve.' });
+  next();
+}
+
+
+
 function escapeHtml(str){
   return String(str==null?"":str)
     .replace(/&/g,'&amp;')
@@ -141,11 +56,16 @@ function escapeHtml(str){
     .replace(/'/g,'&#039;');
 }
 
+
 function makeRoomCode(len = 4){
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let out = '';
   for(let i=0;i<len;i++) out += alphabet[Math.floor(Math.random()*alphabet.length)];
   return out;
+}
+
+function uid(prefix='t'){
+  return prefix + '_' + Math.random().toString(16).slice(2) + '_' + Date.now().toString(16);
 }
 
 function createLobbyRoom({ hostName, hostCharacterKey, maxPlayers=4, isPublic=false, password=null }){
@@ -204,6 +124,7 @@ function joinLobbyRoom({ roomCode, name, characterKey, password=null }){
     connected: false
   });
 
+  // Return roomCode too so API callers never accidentally use undefined.
   return { code: roomCode, token };
 }
 
@@ -268,7 +189,7 @@ app.post('/api/create-room', (req, res) => {
 });
 
 // NEW: create lobby room (token-based)
-app.post('/api/create-room-lobby', (req, res) => {
+app.post('/api/create-room-lobby', requireAuth, (req, res) => {
   try{
     const b = req.body || {};
     const name = String(b.name||'').trim();
@@ -319,7 +240,7 @@ app.post('/api/join-room', (req, res) => {
 });
 
 // NEW: send invite email(s) (host only)
-app.post('/api/send-invite', async (req, res) => {
+app.post('/api/send-invite', requireAuth, async (req, res) => {
   try{
     const b = req.body || {};
     const room = String(b.room||'').trim().toUpperCase();
@@ -402,7 +323,6 @@ app.post('/api/send-invite', async (req, res) => {
     return res.status(500).json({ error: 'Szerver hiba e-mail küldés közben.' });
   }
 });
-
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: true, methods: ['GET','POST'] }
@@ -613,15 +533,15 @@ io.on('connection', (socket) => {
         return;
       }
 
-      const res = applyAction(s0, type, payload);
-      let next = res && res.next ? res.next : s0;
+	const res = applyAction(s0, type, payload);
+	let next = res && res.next ? res.next : s0;
 
-      // ✅ Online: ugyanúgy fusson le az auto-capture, mint offline-ban
-      if (Engine && typeof Engine.captureIfPossible === "function") {
-        next = Engine.captureIfPossible(next);
-      }
+// ✅ Online: ugyanúgy fusson le az auto-capture, mint offline-ban
+if (Engine && typeof Engine.captureIfPossible === "function") {
+  next = Engine.captureIfPossible(next);
+}
 
-      setRoomState(code, next);
+setRoomState(code, next);
 
       if(res && res.log){
         io.to(code).emit('serverMsg', res.log);
