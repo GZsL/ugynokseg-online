@@ -547,6 +547,26 @@ io.on('connection', (socket) => {
     socket.emit('state', stateForPlayer(r.state, playerIndex));
   }
 
+  // Explicit snapshot request (internet-friendly reconnect):
+  // Clients can call this after a temporary disconnect/reconnect to resync.
+  socket.on('requestSnapshot', () => {
+    try{
+      const code = socket.data.roomCode;
+      const idx = socket.data.playerIndex;
+      const rr = rooms.get(code);
+      if(!rr) return;
+      if(rr.phase === 'LOBBY'){
+        socket.emit('lobby', lobbySnapshot(code));
+      }else if(rr.phase === 'IN_GAME' && rr.state){
+        socket.emit('state', stateForPlayer(rr.state, idx));
+      }else{
+        socket.emit('serverMsg', 'Nincs elérhető state (szoba lezárva).');
+      }
+    }catch(e){
+      // ignore
+    }
+  });
+
   // --- CHAT (ephemeral): announce join (no persistence) ---
   try{
     if(r.players && r.players[playerIndex]){

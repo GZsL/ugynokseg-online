@@ -2,6 +2,15 @@ const params = new URLSearchParams(location.search);
 const ROOM = (params.get('room')||'').trim().toUpperCase();
 const TOKEN = (params.get('token')||'').trim();
 
+// If user refreshed and lost token in URL, try to restore from local session.
+try{
+  if(typeof ensureTokenInUrlOrRedirect==='function'){
+    if(ensureTokenInUrlOrRedirect('lobby.html')){
+      // redirected
+    }
+  }
+}catch(e){}
+
 function escapeHtml(str){
   return String(str==null?"":str)
     .replace(/&/g,'&amp;')
@@ -15,6 +24,8 @@ if(!ROOM || !TOKEN){
   alert('Hiányzik a room vagy token. Menj vissza és csatlakozz újra.');
   location.href = 'intro.html';
 }
+
+try{ if(typeof setSession==='function') setSession(ROOM, TOKEN); }catch(e){}
 
 const roomCodeEl = document.getElementById('roomCode');
 const copyInviteBtn = document.getElementById('copyInviteBtn');
