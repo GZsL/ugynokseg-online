@@ -1,6 +1,22 @@
 const params = new URLSearchParams(location.search);
-const ROOM = (params.get('room')||'').trim().toUpperCase();
-const TOKEN = (params.get('token')||'').trim();
+let ROOM = (params.get('room')||'').trim().toUpperCase();
+let TOKEN = (params.get('token')||'').trim();
+
+// Persist last valid room/token so refresh/new tab doesn't break the lobby
+try{
+  if(!ROOM || !TOKEN){
+    const saved = JSON.parse(localStorage.getItem('ugynokseg_session')||'null');
+    if(saved && saved.room && saved.token){
+      ROOM = String(saved.room).trim().toUpperCase();
+      TOKEN = String(saved.token).trim();
+      // Put it back into the URL for shareability
+      const u = new URL(location.href);
+      u.searchParams.set('room', ROOM);
+      u.searchParams.set('token', TOKEN);
+      history.replaceState({}, '', u.toString());
+    }
+  }
+}catch(e){}
 
 function escapeHtml(str){
   return String(str==null?"":str)
@@ -14,269 +30,103 @@ function escapeHtml(str){
 if(!ROOM || !TOKEN){
   alert('Hiányzik a room vagy token. Menj vissza és csatlakozz újra.');
   location.href = 'intro.html';
-  // Stop execution so we don't run with invalid params (prevents random UI/socket bugs).
-  throw new Error('Missing room/token');
+} else {
+  try{ localStorage.setItem('ugynokseg_session', JSON.stringify({ room: ROOM, token: TOKEN, ts: Date.now() })); }catch(e){}
 }
 
 const roomCodeEl = document.getElementById('roomCode');
-const copyInviteBtn = document.getElementById('copyInviteBtn');
-const copyHint = document.getElementById('copyHint');
-const sendInviteBtn = document.getElementById('sendInviteBtn');
-const sendHint = document.getElementById('sendHint');
-const sendErr = document.getElementById('sendErr');
-const inviteModal = document.getElementById('inviteModal');
-const inviteEmails = document.getElementById('inviteEmails');
-const inviteCancelBtn = document.getElementById('inviteCancelBtn');
-const inviteSendBtn = document.getElementById('inviteSendBtn');
-const inviteModalErr = document.getElementById('inviteModalErr');
-
-const statusEl = document.getElementById('status');
+const copyInviteBtn = document.getElementById('copyInvite');
+const inviteLinkEl = document.getElementById('inviteLink');
 const playersEl = document.getElementById('players');
 const readyBtn = document.getElementById('readyBtn');
 const startBtn = document.getElementById('startBtn');
-const hint2 = document.getElementById('hint2');
+const inviteEmailInput = document.getElementById('inviteEmail');
+const sendInviteBtn = document.getElementById('sendInvite');
 
-roomCodeEl.textContent = ROOM;
-const inviteLink = `${location.origin}/join.html?room=${encodeURIComponent(ROOM)}`;
-function showModal(show){
-  if(!inviteModal) return;
-  inviteModal.style.display = show ? 'flex' : 'none';
-}
-function setElVisible(el, vis){
-  if(!el) return;
-  el.style.display = vis ? 'block' : 'none';
-}
-function normalizeEmails(raw){
-  const parts = String(raw||'')
-    .split(/[,\n\r\t\s]+/g)
-    .map(s=>s.trim())
-    .filter(Boolean);
-  // basic validate
-  const emails = parts.filter(e => /.+@.+\..+/.test(e));
-  return Array.from(new Set(emails)); // unique
-}
+if(roomCodeEl) roomCodeEl.textContent = ROOM;
+if(inviteLinkEl) inviteLinkEl.value = `${location.origin}/join.html?room=${encodeURIComponent(ROOM)}`;
 
-// OPEN modal
-if(sendInviteBtn){
-  sendInviteBtn.addEventListener('click', ()=>{
-    if(inviteEmails) inviteEmails.value = '';
-    if(inviteModalErr) inviteModalErr.style.display='none';
-    showModal(true);
-    setElVisible(sendErr,false);
-    setElVisible(sendHint,false);
-  });
-}
-if(inviteCancelBtn){
-  inviteCancelBtn.addEventListener('click', ()=> showModal(false));
-}
-// click outside closes
-if(inviteModal){
-  inviteModal.addEventListener('click', (e)=>{
-    if(e.target === inviteModal) showModal(false);
-  });
-}
-
-if(inviteSendBtn){
-  inviteSendBtn.addEventListener('click', async ()=>{
-    try{
-      setElVisible(inviteModalErr,false);
-      const emails = normalizeEmails(inviteEmails ? inviteEmails.value : '');
-      if(!emails.length){
-        if(inviteModalErr){
-          inviteModalErr.textContent = 'Adj meg legalább 1 érvényes e-mail címet.';
-          setElVisible(inviteModalErr,true);
-        }
-        return;
-      }
-      inviteSendBtn.disabled = true;
-      const resp = await fetch('/api/send-invite', {
-        method:'POST',
-        headers:{ 'Content-Type':'application/json' },
-        body: JSON.stringify({ room: ROOM, token: TOKEN, emails })
-      });
-      const data = await resp.json().catch(()=>({}));
-      inviteSendBtn.disabled = false;
-
-      if(!resp.ok || data.error){
-        const msg = data && data.error ? data.error : 'Nem sikerült elküldeni a meghívót.';
-        if(inviteModalErr){
-          inviteModalErr.textContent = msg;
-          setElVisible(inviteModalErr,true);
-        }
-        return;
-      }
-
-      showModal(false);
-      if(sendHint){
-        sendHint.style.display='block';
-        setTimeout(()=>{ sendHint.style.display='none'; }, 1400);
-      }
-    }catch(err){
-      console.error(err);
-      if(inviteModalErr){
-        inviteModalErr.textContent = 'Hiba történt küldés közben.';
-        setElVisible(inviteModalErr,true);
-      }
-      if(inviteSendBtn) inviteSendBtn.disabled=false;
-    }
-  });
-}
-
-
-// Meghívó link másolása gomb
-if(copyInviteBtn){
-  copyInviteBtn.addEventListener('click', async () => {
-    try{
-      await navigator.clipboard.writeText(inviteLink);
-      if(copyHint){
-        copyHint.style.display = 'block';
-        setTimeout(()=>{ copyHint.style.display='none'; }, 1200);
-      }
-    }catch(e){
-      // fallback: prompt
-      window.prompt("Másold ki a meghívó linket:", inviteLink);
-    }
-  });
-}
-let lobby = null;
-let socket = null;
-
-// --- Chat (ephemeral) ---
-const chatState = { messages: [] }; // keep last ~80
-
-function addChatMessage(m){
-  chatState.messages.push(m);
-  if(chatState.messages.length > 80) chatState.messages.shift();
-  renderChat();
-}
-
-function renderChat(){
-  const log = document.getElementById('chatLog');
-  if(!log) return;
-  log.innerHTML = chatState.messages.map(m => {
-    const ts = m.ts ? new Date(m.ts) : null;
-    const t = ts ? ts.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '';
-    if(m.type === 'system'){
-      return `<div class="chat-line system">${escapeHtml(t ? `[${t}] ` : '')}${escapeHtml(m.text||'')}</div>`;
-    }
-    const name = m.name || 'Játékos';
-    return `<div class="chat-line"><span class="chat-name">${escapeHtml(name)}:</span> ${escapeHtml(m.text||'')} <span style="opacity:.55; font-size:11px;">${escapeHtml(t)}</span></div>`;
-  }).join('');
-  log.scrollTop = log.scrollHeight;
-}
-
-function initChatUI(){
-  const input = document.getElementById('chatInput');
-  const send = document.getElementById('chatSend');
-  if(!input || !send) return;
-
-  const doSend = () => {
-    const text = String(input.value||'').trim();
-    if(!text) return;
-    if(!socket) return;
-    socket.emit('chat', { text });
-    input.value = '';
-    input.focus();
-  };
-
-  send.addEventListener('click', doSend);
-  input.addEventListener('keydown', (e) => {
-    if(e.key === 'Enter'){
-      e.preventDefault();
-      doSend();
-    }
-  });
-}
-
-function myPlayer(){
-  if(!lobby || !lobby.players) return null;
-  // token alapján a szerver oldalon az index fix, de a lobby snapshot nem küldi tokeneket.
-  // Itt egyszerűen: a READY gombot nem személyre szabjuk, csak küldjük a szervernek.
-  return null;
-}
-
-function charName(key){
-  const map = {
-    VETERAN:'Veterán', LOGISTIC:'Logisztikus', STRATEGIST:'Stratéga', PROFILER:'Profilozó', NEMESIS:'Nemezis vadász', DAREDEVIL:'Vakmerő'
-  };
-  return map[key] || key || '—';
-}
-
-function render(){
-  if(!lobby){
-    statusEl.textContent = 'Kapcsolódás…';
-    return;
+copyInviteBtn?.addEventListener('click', async ()=>{
+  try{
+    await navigator.clipboard.writeText(`${location.origin}/join.html?room=${encodeURIComponent(ROOM)}`);
+    copyInviteBtn.textContent = 'Másolva!';
+    setTimeout(()=> copyInviteBtn.textContent = 'Link másolása', 900);
+  }catch(e){
+    alert('Nem sikerült a vágólapra másolni.');
   }
-  statusEl.textContent = (lobby.phase==='LOBBY') ? 'LOBBY' : (lobby.phase==='IN_GAME' ? 'JÁTÉK INDUL…' : lobby.phase);
+});
 
-  const list = (lobby.players||[]);
-  playersEl.innerHTML = list.map(p=>{
-    const isOnline = !!p.connected;
-    const badge = p.ready ? 'ready' : (isOnline ? 'notready' : 'offline');
-    const badgeTxt = p.ready ? 'READY' : (isOnline ? 'NOT READY' : 'OFFLINE');
-    const col = (typeof THEME_COLORS==='object' && THEME_COLORS[p.characterKey]) ? THEME_COLORS[p.characterKey] : '#f8bd01';
-    return `
-      <div class="playerRow" style="margin:8px 0;">
-        <div style="display:flex; align-items:center; gap:10px;">
-          <div style="width:12px; height:12px; border-radius:999px; background:${col};"></div>
-          <div>
-            <div style="font-weight:900;">${escapeHtml(p.name||p.id)} ${p.isHost ? '<span class="mini">(host)</span>' : ''}</div>
-            <div class="mini">${escapeHtml(charName(p.characterKey))}</div>
-          </div>
-        </div>
-        <div class="badge ${badge}">${badgeTxt}</div>
-      </div>
-    `;
-  }).join('');
+function renderLobby(snapshot){
+  if(!snapshot) return;
 
-  const readyCount = list.filter(p=>p && p.ready).length;
-  hint2.textContent = `READY: ${readyCount}/${list.length} (min. 2 ready kell a start-hoz)`;
-}
+  if(roomCodeEl) roomCodeEl.textContent = snapshot.room || ROOM;
 
-function connect(){
-  if(typeof io !== 'function'){
-    alert('socket.io kliens hiányzik');
-    return;
+  const arr = snapshot.players || [];
+  if(playersEl){
+    playersEl.innerHTML = arr.map(p=>{
+      const st = p.ready ? 'READY' : 'NOT READY';
+      const dot = p.connected ? '🟢' : '⚪';
+      const host = p.isHost ? ' (HOST)' : '';
+      return `<div class="playerRow">
+        <div class="playerName">${dot} ${escapeHtml(p.name)}${host}</div>
+        <div class="playerMeta">${escapeHtml(p.characterKey || '')}</div>
+        <div class="playerReady ${p.ready?'on':'off'}">${st}</div>
+      </div>`;
+    }).join('');
   }
-  socket = io({ query: { room: ROOM, token: TOKEN } });
 
-  socket.on('connect', ()=>{
-    statusEl.textContent = 'Kapcsolódva';
-  });
-
-  socket.on('lobby', (snap)=>{
-    lobby = snap;
-    render();
-    if(lobby && lobby.phase==='IN_GAME'){
-      // Késleltetve, hogy a játékos lássa a váltást
-      setTimeout(()=>{
-        location.href = `game.html?room=${encodeURIComponent(ROOM)}&token=${encodeURIComponent(TOKEN)}`;
-      }, 350);
-    }
-  });
-
-  socket.on('serverMsg', (t)=>{
-    if(typeof toast==='function') toast(String(t));
-  });
-
-  socket.on('chat', (m)=>{
-    addChatMessage(m||{});
-  });
-
-  socket.on('connect_error', ()=>{
-    statusEl.textContent = 'Kapcsolati hiba';
-  });
+  // Enable start only if host + at least 2 ready
+  const readyCount = arr.filter(p=>p.ready).length;
+  const me = arr.find(p=>p && p.connected && p.isHost) || null;
+  if(startBtn){
+    startBtn.disabled = !(readyCount >= 2); // server will still validate host
+  }
 }
 
-readyBtn.onclick = ()=>{
-  if(!socket) return;
+const socket = io({
+  query: { room: ROOM, token: TOKEN }
+});
+
+socket.on('connect', ()=>{ /* ok */ });
+
+socket.on('serverMsg', (txt)=>{
+  // Keep user in lobby; do not hard-redirect to login.
+  if(txt) console.log('[serverMsg]', txt);
+});
+
+socket.on('lobby', (snapshot)=>{
+  renderLobby(snapshot);
+});
+
+readyBtn?.addEventListener('click', ()=>{
   socket.emit('lobbyAction', { type:'TOGGLE_READY' });
-};
-startBtn.onclick = ()=>{
-  if(!socket) return;
-  socket.emit('lobbyAction', { type:'START_GAME' });
-};
+});
 
-render();
-initChatUI();
-connect();
+startBtn?.addEventListener('click', ()=>{
+  socket.emit('lobbyAction', { type:'START_GAME' });
+});
+
+socket.on('state', ()=>{
+  // Game started → go to game view with room+token
+  location.href = `game.html?room=${encodeURIComponent(ROOM)}&token=${encodeURIComponent(TOKEN)}`;
+});
+
+sendInviteBtn?.addEventListener('click', async ()=>{
+  const raw = (inviteEmailInput?.value || '').trim();
+  if(!raw){ alert('Adj meg e-mail címet.'); return; }
+  const emails = raw.split(',').map(s=>s.trim()).filter(Boolean);
+
+  const res = await fetch('/api/send-invite', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ room: ROOM, token: TOKEN, emails })
+  });
+
+  const data = await res.json().catch(()=>null);
+  if(!res.ok || !data || data.error){
+    alert((data && data.error) ? data.error : 'Nem sikerült meghívót küldeni.');
+    return;
+  }
+
+  alert('Meghívó elküldve (vagy részben elküldve).');
+});
