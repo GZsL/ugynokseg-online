@@ -24,7 +24,11 @@
     <div id="msg" style="margin-top:12px;min-height:18px;"></div>
 
     <div style="margin-top:12px;opacity:.9;">
-      <a href="login.html">Van már fiókod? Bejelentkezés</a>
+      <a id="toLogin" href="login.html">Van már fiókod? Bejelentkezés</a>
+<script>
+  const next = new URLSearchParams(location.search).get("next");
+  if (next) document.getElementById("toLogin").href = "login.html?next=" + encodeURIComponent(next);
+</script>
     </div>
   </div>
 
@@ -54,7 +58,8 @@
     }
 
     msg.textContent = "Sikeres regisztráció ✅";
-    setTimeout(() => location.href = "host.html", 400);
+    const next = new URLSearchParams(location.search).get("next") || "/host.html";
+    setTimeout(() => location.href = next, 400);
   });
 </script>
 </body>

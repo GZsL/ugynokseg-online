@@ -50,7 +50,8 @@
     }
 
     msg.textContent = "Sikeres belépés ✅";
-    setTimeout(() => location.href = "host.html", 300);
+    const next = new URLSearchParams(location.search).get("next") || "/host.html";
+    setTimeout(() => location.href = next, 300);
   });
 </script>
 </body>

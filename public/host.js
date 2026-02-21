@@ -1,3 +1,25 @@
+// ✅ Host oldal: csak belépett felhasználónak
+(async function requireLoginForHostPage(){
+  try{
+    const r = await fetch("/api/auth/me", { credentials: "include" });
+    const j = await r.json().catch(()=>({user:null}));
+
+    if(!j.user){
+      // nincs login -> login oldal, és visszajövünk hostra
+      location.href = "/login.html?next=/host.html";
+      return;
+    }
+
+    // opcionális: auto kitöltjük a nevet, ha üres
+    const nameInput = document.getElementById("name");
+    if(nameInput && !nameInput.value){
+      nameInput.value = j.user.name || "";
+    }
+  }catch(e){
+    // ha valamiért nem elérhető az auth, akkor is loginra dobjuk
+    location.href = "/login.html?next=/host.html";
+  }
+})();
 const CHARACTERS = [
   { key:"VETERAN", name:"Veterán", img:"assets/characters/veteran.png" },
   { key:"LOGISTIC", name:"Logisztikus", img:"assets/characters/logisztikus.png" },
