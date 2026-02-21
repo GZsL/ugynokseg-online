@@ -18,32 +18,31 @@ function renderChars(){
     const card = document.createElement('div');
     card.className = 'charCard' + (picked===ch.key ? ' picked' : '');
 
+    const imgWrap = document.createElement('div');
+    imgWrap.className = 'charImg';
     const img = document.createElement('img');
     img.src = ch.img;
     img.alt = ch.name;
-    img.draggable = false;
+    imgWrap.appendChild(img);
 
-    const name = document.createElement('div');
-    name.className = 'charName';
-    name.textContent = ch.name;
+    const btn = document.createElement('button');
+    btn.className = 'btn pickBtn';
+    const color = (typeof THEME_COLORS==='object' && THEME_COLORS[ch.key]) ? THEME_COLORS[ch.key] : '#f8bd01';
+    btn.style.background = color;
+    btn.style.color = '#111';
+    btn.textContent = (picked===ch.key) ? 'Kiválasztva' : 'Választom';
+    btn.onclick = ()=>{ picked = ch.key; renderChars(); };
 
-    card.appendChild(img);
-    card.appendChild(name);
-
-    card.addEventListener('click', ()=>{
-      picked = ch.key;
-      renderChars();
-    });
-
+    card.appendChild(imgWrap);
+    card.appendChild(btn);
     grid.appendChild(card);
   });
 }
 
-async function joinRoom(){
+async function doJoin(){
   const room = (document.getElementById('room')?.value || '').trim().toUpperCase();
   const name = (document.getElementById('name')?.value || '').trim();
   const password = (document.getElementById('password')?.value || '').trim();
-
   if(!room){ alert('Add meg a szoba kódot.'); return; }
   if(!name){ alert('Adj meg nevet.'); return; }
   if(!picked){ alert('Válassz karaktert.'); return; }
@@ -53,17 +52,11 @@ async function joinRoom(){
     headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ room, name, characterKey: picked, password: password || null })
   });
-
   const data = await res.json().catch(()=>null);
   if(!res.ok || !data || !data.token){
     alert((data && data.error) ? data.error : 'Nem sikerült csatlakozni.');
     return;
   }
-
-  // ✅ PERSIST room+token (refresh/new tab miatt)
-  try{
-    localStorage.setItem('ugynokseg_session', JSON.stringify({ room: room, token: data.token, ts: Date.now() }));
-  }catch(e){}
 
   location.href = `lobby.html?room=${encodeURIComponent(room)}&token=${encodeURIComponent(data.token)}`;
 }
@@ -71,15 +64,12 @@ async function joinRoom(){
 // Prefill room from query (?room=ABCD)
 try{
   const params = new URLSearchParams(location.search);
-  const qroom = (params.get('room')||'').trim().toUpperCase();
-  if(qroom){
-    const el = document.getElementById('room');
-    if(el) el.value = qroom;
-  }
+  const qRoom = (params.get('room')||'').trim().toUpperCase();
+  if(qRoom) document.getElementById('room').value = qRoom;
 }catch(e){}
 
 document.getElementById('join')?.addEventListener('click', ()=>{
-  joinRoom().catch(e=>{ console.error(e); alert('Hiba a szerver elérésekor.'); });
+  doJoin().catch(e=>{ console.error(e); alert('Hiba a szerver elérésekor.'); });
 });
 
 renderChars();

@@ -1,304 +1,228 @@
-// public/lobby.js (TELJES)
-
 const params = new URLSearchParams(location.search);
-let ROOM = (params.get("room") || "").trim().toUpperCase();
-let TOKEN = (params.get("token") || "").trim();
+const ROOM = (params.get('room')||'').trim().toUpperCase();
+const TOKEN = (params.get('token')||'').trim();
 
-// Persist last valid room/token so refresh/new tab doesn't break the lobby
-try {
-  if (!ROOM || !TOKEN) {
-    const saved = JSON.parse(localStorage.getItem("ugynokseg_session") || "null");
-    if (saved && saved.room && saved.token) {
-      ROOM = String(saved.room).trim().toUpperCase();
-      TOKEN = String(saved.token).trim();
-      const u = new URL(location.href);
-      u.searchParams.set("room", ROOM);
-      u.searchParams.set("token", TOKEN);
-      history.replaceState({}, "", u.toString());
-    }
-  }
-} catch {}
-
-function escapeHtml(str) {
-  return String(str == null ? "" : str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+function escapeHtml(str){
+  return String(str==null?"":str)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#039;');
 }
 
-function redirectToLogin() {
-  const next = location.pathname + location.search;
-  location.href = `/login.html?next=${encodeURIComponent(next)}`;
+if(!ROOM || !TOKEN){
+  alert('Hiányzik a room vagy token. Menj vissza és csatlakozz újra.');
+  location.href = 'intro.html';
 }
 
-if (!ROOM || !TOKEN) {
-  alert("Hiányzik a room vagy token. Menj vissza és csatlakozz újra.");
-  location.href = "intro.html";
-} else {
-  try {
-    localStorage.setItem(
-      "ugynokseg_session",
-      JSON.stringify({ room: ROOM, token: TOKEN, ts: Date.now() })
-    );
-  } catch {}
+const roomCodeEl = document.getElementById('roomCode');
+const copyInviteBtn = document.getElementById('copyInviteBtn');
+const copyHint = document.getElementById('copyHint');
+const sendInviteBtn = document.getElementById('sendInviteBtn');
+const sendHint = document.getElementById('sendHint');
+const sendErr = document.getElementById('sendErr');
+const inviteModal = document.getElementById('inviteModal');
+const inviteEmails = document.getElementById('inviteEmails');
+const inviteCancelBtn = document.getElementById('inviteCancelBtn');
+const inviteSendBtn = document.getElementById('inviteSendBtn');
+const inviteModalErr = document.getElementById('inviteModalErr');
+
+const statusEl = document.getElementById('status');
+const playersEl = document.getElementById('players');
+const readyBtn = document.getElementById('readyBtn');
+const startBtn = document.getElementById('startBtn');
+const hint2 = document.getElementById('hint2');
+
+roomCodeEl.textContent = ROOM;
+const inviteLink = `${location.origin}/join.html?room=${encodeURIComponent(ROOM)}`;
+function showModal(show){
+  if(!inviteModal) return;
+  inviteModal.style.display = show ? 'flex' : 'none';
 }
-
-// ---- DOM ----
-const roomCodeEl = document.getElementById("roomCode");
-const statusEl = document.getElementById("status");
-const hint2El = document.getElementById("hint2");
-
-const playersEl = document.getElementById("players");
-const readyBtn = document.getElementById("readyBtn");
-const startBtn = document.getElementById("startBtn");
-
-const copyInviteBtn = document.getElementById("copyInviteBtn");
-const sendInviteBtn = document.getElementById("sendInviteBtn");
-const copyHint = document.getElementById("copyHint");
-const sendHint = document.getElementById("sendHint");
-const sendErr = document.getElementById("sendErr");
-
-// Modal
-const inviteModal = document.getElementById("inviteModal");
-const inviteEmails = document.getElementById("inviteEmails");
-const inviteCancelBtn = document.getElementById("inviteCancelBtn");
-const inviteSendBtn = document.getElementById("inviteSendBtn");
-const inviteModalErr = document.getElementById("inviteModalErr");
-
-if (roomCodeEl) roomCodeEl.textContent = ROOM;
-
-function show(el) {
-  if (!el) return;
-  el.style.display = "";
+function setElVisible(el, vis){
+  if(!el) return;
+  el.style.display = vis ? 'block' : 'none';
 }
-function hide(el) {
-  if (!el) return;
-  el.style.display = "none";
-}
-function setText(el, txt) {
-  if (!el) return;
-  el.textContent = txt;
-}
-function setErr(txt) {
-  if (!sendErr) return;
-  if (!txt) {
-    hide(sendErr);
-    sendErr.textContent = "";
-  } else {
-    sendErr.textContent = txt;
-    show(sendErr);
-  }
-}
-function setModalErr(txt) {
-  if (!inviteModalErr) return;
-  if (!txt) {
-    hide(inviteModalErr);
-    inviteModalErr.textContent = "";
-  } else {
-    inviteModalErr.textContent = txt;
-    show(inviteModalErr);
-  }
-}
-
-function getInviteLink() {
-  return `${location.origin}/join.html?room=${encodeURIComponent(ROOM)}`;
-}
-
-// ---- Copy invite ----
-async function copyToClipboard(text) {
-  // Modern clipboard (secure context)
-  if (navigator.clipboard && window.isSecureContext) {
-    await navigator.clipboard.writeText(text);
-    return true;
-  }
-
-  // Fallback: hidden textarea + execCommand
-  const ta = document.createElement("textarea");
-  ta.value = text;
-  ta.setAttribute("readonly", "");
-  ta.style.position = "fixed";
-  ta.style.left = "-9999px";
-  ta.style.top = "-9999px";
-  document.body.appendChild(ta);
-  ta.select();
-  try {
-    const ok = document.execCommand("copy");
-    document.body.removeChild(ta);
-    return ok;
-  } catch {
-    document.body.removeChild(ta);
-    return false;
-  }
-}
-
-copyInviteBtn?.addEventListener("click", async () => {
-  try {
-    const link = getInviteLink();
-    const ok = await copyToClipboard(link);
-    if (!ok) {
-      // last resort fallback
-      prompt("Másold ki manuálisan:", link);
-      return;
-    }
-    hide(sendErr);
-    show(copyHint);
-    setTimeout(() => hide(copyHint), 900);
-  } catch {
-    prompt("Másold ki manuálisan:", getInviteLink());
-  }
-});
-
-// ---- Invite modal ----
-function openInviteModal() {
-  setModalErr("");
-  if (inviteEmails) inviteEmails.value = "";
-  show(inviteModal);
-  inviteEmails?.focus();
-}
-function closeInviteModal() {
-  hide(inviteModal);
-  setModalErr("");
-}
-
-sendInviteBtn?.addEventListener("click", () => {
-  openInviteModal();
-});
-
-inviteCancelBtn?.addEventListener("click", () => {
-  closeInviteModal();
-});
-
-// Close modal on overlay click (outside card)
-inviteModal?.addEventListener("click", (e) => {
-  if (e.target === inviteModal) closeInviteModal();
-});
-
-// ---- Render lobby ----
-function renderLobby(snapshot) {
-  if (!snapshot) return;
-
-  if (roomCodeEl) roomCodeEl.textContent = snapshot.room || ROOM;
-
-  const arr = snapshot.players || [];
-  if (playersEl) {
-    playersEl.innerHTML = arr
-      .map((p) => {
-        const st = p.ready ? "READY" : "NOT READY";
-        const dot = p.connected ? "🟢" : "⚪";
-        const host = p.isHost ? " (HOST)" : "";
-        return `<div class="playerRow">
-          <div class="playerName">${dot} ${escapeHtml(p.name)}${host}</div>
-          <div class="playerMeta">${escapeHtml(p.characterKey || "")}</div>
-          <div class="playerReady ${p.ready ? "on" : "off"}">${st}</div>
-        </div>`;
-      })
-      .join("");
-  }
-
-  // UI only: start button when >=2 ready (server still validates host)
-  const readyCount = arr.filter((p) => p && p.ready).length;
-  if (startBtn) startBtn.disabled = !(readyCount >= 2);
-}
-
-// ---- Socket ----
-const socket = io({
-  query: { room: ROOM, token: TOKEN },
-});
-
-socket.on("connect", () => {
-  setText(statusEl, "Kapcsolódva");
-  if (hint2El) hint2El.textContent = "";
-});
-
-socket.on("disconnect", () => {
-  setText(statusEl, "Szétkapcsolva…");
-});
-
-socket.on("serverMsg", (txt) => {
-  // Ha invalid token, ne hagyjuk a usert beragadni
-  if (txt && String(txt).toLowerCase().includes("érvénytelen token")) {
-    alert("Érvénytelen token ehhez a szobához. Jelentkezz be újra.");
-    redirectToLogin();
-    return;
-  }
-  if (txt) console.log("[serverMsg]", txt);
-});
-
-socket.on("lobby", (snapshot) => {
-  renderLobby(snapshot);
-});
-
-readyBtn?.addEventListener("click", () => {
-  socket.emit("lobbyAction", { type: "TOGGLE_READY" });
-});
-
-startBtn?.addEventListener("click", () => {
-  socket.emit("lobbyAction", { type: "START_GAME" });
-});
-
-socket.on("state", () => {
-  location.href = `game.html?room=${encodeURIComponent(ROOM)}&token=${encodeURIComponent(
-    TOKEN
-  )}`;
-});
-
-// ---- Send invite ----
-function parseEmails(raw) {
-  return String(raw || "")
-    .split(/[\n,;\s]+/g)
-    .map((s) => s.trim())
+function normalizeEmails(raw){
+  const parts = String(raw||'')
+    .split(/[,\n\r\t\s]+/g)
+    .map(s=>s.trim())
     .filter(Boolean);
+  // basic validate
+  const emails = parts.filter(e => /.+@.+\..+/.test(e));
+  return Array.from(new Set(emails)); // unique
 }
 
-inviteSendBtn?.addEventListener("click", async () => {
-  setModalErr("");
-  setErr("");
+// OPEN modal
+if(sendInviteBtn){
+  sendInviteBtn.addEventListener('click', ()=>{
+    if(inviteEmails) inviteEmails.value = '';
+    if(inviteModalErr) inviteModalErr.style.display='none';
+    showModal(true);
+    setElVisible(sendErr,false);
+    setElVisible(sendHint,false);
+  });
+}
+if(inviteCancelBtn){
+  inviteCancelBtn.addEventListener('click', ()=> showModal(false));
+}
+// click outside closes
+if(inviteModal){
+  inviteModal.addEventListener('click', (e)=>{
+    if(e.target === inviteModal) showModal(false);
+  });
+}
 
-  const emails = parseEmails(inviteEmails?.value || "");
-  if (!emails.length) {
-    setModalErr("Adj meg legalább 1 e-mail címet.");
+if(inviteSendBtn){
+  inviteSendBtn.addEventListener('click', async ()=>{
+    try{
+      setElVisible(inviteModalErr,false);
+      const emails = normalizeEmails(inviteEmails ? inviteEmails.value : '');
+      if(!emails.length){
+        if(inviteModalErr){
+          inviteModalErr.textContent = 'Adj meg legalább 1 érvényes e-mail címet.';
+          setElVisible(inviteModalErr,true);
+        }
+        return;
+      }
+      inviteSendBtn.disabled = true;
+      const resp = await fetch('/api/send-invite', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify({ room: ROOM, token: TOKEN, emails })
+      });
+      const data = await resp.json().catch(()=>({}));
+      inviteSendBtn.disabled = false;
+
+      if(!resp.ok || data.error){
+        const msg = data && data.error ? data.error : 'Nem sikerült elküldeni a meghívót.';
+        if(inviteModalErr){
+          inviteModalErr.textContent = msg;
+          setElVisible(inviteModalErr,true);
+        }
+        return;
+      }
+
+      showModal(false);
+      if(sendHint){
+        sendHint.style.display='block';
+        setTimeout(()=>{ sendHint.style.display='none'; }, 1400);
+      }
+    }catch(err){
+      console.error(err);
+      if(inviteModalErr){
+        inviteModalErr.textContent = 'Hiba történt küldés közben.';
+        setElVisible(inviteModalErr,true);
+      }
+      if(inviteSendBtn) inviteSendBtn.disabled=false;
+    }
+  });
+}
+
+
+// Meghívó link másolása gomb
+if(copyInviteBtn){
+  copyInviteBtn.addEventListener('click', async () => {
+    try{
+      await navigator.clipboard.writeText(inviteLink);
+      if(copyHint){
+        copyHint.style.display = 'block';
+        setTimeout(()=>{ copyHint.style.display='none'; }, 1200);
+      }
+    }catch(e){
+      // fallback: prompt
+      window.prompt("Másold ki a meghívó linket:", inviteLink);
+    }
+  });
+}
+let lobby = null;
+let socket = null;
+
+function myPlayer(){
+  if(!lobby || !lobby.players) return null;
+  // token alapján a szerver oldalon az index fix, de a lobby snapshot nem küldi tokeneket.
+  // Itt egyszerűen: a READY gombot nem személyre szabjuk, csak küldjük a szervernek.
+  return null;
+}
+
+function charName(key){
+  const map = {
+    VETERAN:'Veterán', LOGISTIC:'Logisztikus', STRATEGIST:'Stratéga', PROFILER:'Profilozó', NEMESIS:'Nemezis vadász', DAREDEVIL:'Vakmerő'
+  };
+  return map[key] || key || '—';
+}
+
+function render(){
+  if(!lobby){
+    statusEl.textContent = 'Kapcsolódás…';
     return;
   }
+  statusEl.textContent = (lobby.phase==='LOBBY') ? 'LOBBY' : (lobby.phase==='IN_GAME' ? 'JÁTÉK INDUL…' : lobby.phase);
 
-  inviteSendBtn.disabled = true;
-  inviteSendBtn.textContent = "KÜLDÉS…";
+  const list = (lobby.players||[]);
+  playersEl.innerHTML = list.map(p=>{
+    const isOnline = !!p.connected;
+    const badge = p.ready ? 'ready' : (isOnline ? 'notready' : 'offline');
+    const badgeTxt = p.ready ? 'READY' : (isOnline ? 'NOT READY' : 'OFFLINE');
+    const col = (typeof THEME_COLORS==='object' && THEME_COLORS[p.characterKey]) ? THEME_COLORS[p.characterKey] : '#f8bd01';
+    return `
+      <div class="playerRow" style="margin:8px 0;">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <div style="width:12px; height:12px; border-radius:999px; background:${col};"></div>
+          <div>
+            <div style="font-weight:900;">${escapeHtml(p.name||p.id)} ${p.isHost ? '<span class="mini">(host)</span>' : ''}</div>
+            <div class="mini">${escapeHtml(charName(p.characterKey))}</div>
+          </div>
+        </div>
+        <div class="badge ${badge}">${badgeTxt}</div>
+      </div>
+    `;
+  }).join('');
 
-  try {
-    const res = await fetch("/api/send-invite", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include", // ✅ fontos: auth cookie menjen
-      body: JSON.stringify({ room: ROOM, token: TOKEN, emails }),
-    });
+  const readyCount = list.filter(p=>p && p.ready).length;
+  hint2.textContent = `READY: ${readyCount}/${list.length} (min. 2 ready kell a start-hoz)`;
+}
 
-    if (res.status === 401) {
-      closeInviteModal();
-      redirectToLogin();
-      return;
-    }
-
-    const data = await res.json().catch(() => null);
-
-    if (res.status === 403) {
-      setModalErr("Csak a host küldhet meghívót (vagy rossz a host token).");
-      return;
-    }
-
-    if (!res.ok) {
-      setModalErr((data && data.error) || "Nem sikerült meghívót küldeni.");
-      return;
-    }
-
-    // success
-    closeInviteModal();
-    show(sendHint);
-    setTimeout(() => hide(sendHint), 1000);
-  } catch (e) {
-    setModalErr("Hálózati hiba. Próbáld újra.");
-  } finally {
-    inviteSendBtn.disabled = false;
-    inviteSendBtn.textContent = "KÜLDÉS";
+function connect(){
+  if(typeof io !== 'function'){
+    alert('socket.io kliens hiányzik');
+    return;
   }
-});
+  socket = io({ query: { room: ROOM, token: TOKEN } });
+
+  socket.on('connect', ()=>{
+    statusEl.textContent = 'Kapcsolódva';
+  });
+
+  socket.on('lobby', (snap)=>{
+    lobby = snap;
+    render();
+    if(lobby && lobby.phase==='IN_GAME'){
+      // Késleltetve, hogy a játékos lássa a váltást
+      setTimeout(()=>{
+        location.href = `game.html?room=${encodeURIComponent(ROOM)}&token=${encodeURIComponent(TOKEN)}`;
+      }, 350);
+    }
+  });
+
+  socket.on('serverMsg', (t)=>{
+    if(typeof toast==='function') toast(String(t));
+  });
+
+  socket.on('connect_error', ()=>{
+    statusEl.textContent = 'Kapcsolati hiba';
+  });
+}
+
+readyBtn.onclick = ()=>{
+  if(!socket) return;
+  socket.emit('lobbyAction', { type:'TOGGLE_READY' });
+};
+startBtn.onclick = ()=>{
+  if(!socket) return;
+  socket.emit('lobbyAction', { type:'START_GAME' });
+};
+
+render();
+connect();

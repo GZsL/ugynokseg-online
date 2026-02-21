@@ -9,27 +9,20 @@ const CHARACTERS = [
 
 let picked = "VETERAN";
 
-async function ensureLoggedIn(){
-  const res = await fetch('/api/auth/me');
-  const data = await res.json().catch(()=>({user:null}));
-  if(!data.user){
-    location.href = `/login.html?next=${encodeURIComponent('/host.html')}`;
-    return false;
-  }
-  return true;
-}
-
 function renderChars(){
   const grid = document.getElementById('charGrid');
   if(!grid) return;
   grid.innerHTML = "";
+
   CHARACTERS.forEach(ch=>{
     const card = document.createElement('div');
     card.className = 'charCard' + (picked===ch.key ? ' picked' : '');
+
     const imgWrap = document.createElement('div');
     imgWrap.className = 'charImg';
     const img = document.createElement('img');
-    img.src = ch.img; img.alt = ch.name;
+    img.src = ch.img;
+    img.alt = ch.name;
     imgWrap.appendChild(img);
 
     const btn = document.createElement('button');
@@ -47,8 +40,6 @@ function renderChars(){
 }
 
 async function createRoom(){
-  if(!(await ensureLoggedIn())) return;
-
   const name = (document.getElementById('name')?.value || '').trim();
   const maxPlayers = document.getElementById('maxPlayers')?.value || '4';
   const password = (document.getElementById('password')?.value || '').trim();
@@ -60,14 +51,7 @@ async function createRoom(){
     headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ name, characterKey: picked, maxPlayers: parseInt(maxPlayers,10), password: password || null })
   });
-
   const data = await res.json().catch(()=>null);
-
-  if(res.status === 401){
-    location.href = `/login.html?next=${encodeURIComponent('/host.html')}`;
-    return;
-  }
-
   if(!res.ok || !data || !data.room || !data.token){
     alert((data && data.error) ? data.error : 'Nem sikerült szobát létrehozni.');
     return;
@@ -81,4 +65,3 @@ document.getElementById('create')?.addEventListener('click', ()=>{
 });
 
 renderChars();
-ensureLoggedIn();
