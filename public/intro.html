@@ -21,11 +21,63 @@
       <video id="introVideo" autoplay muted playsinline></video>
     </div>
     <div class="menu">
-      <a class="btn btn-theme" href="host.html">Új szoba (Host)</a>
+      <a class="btn btn-theme" href="host.html" id="hostLink">Új szoba (Host)</a>
       <a class="btn btn-outline" href="join.html">Csatlakozás (Join)</a>
       <a class="btn btn-outline" href="setup.html" title="Régi technikai setup (player=0..3)">Setup (legacy)</a>
     </div>
   </div>
+
+    <div id="authPill" class="pill" style="background:#1f1f1f; border:2px solid #2b2b2b;">
+      <span id="authStatus">Betöltés…</span>
+      <button id="authOpenBtn" class="btn btn-outline" style="margin-left:10px; padding:8px 12px;">Bejelentkezés / Regisztráció</button>
+      <button id="authLogoutBtn" class="btn btn-outline" style="margin-left:10px; padding:8px 12px; display:none;">Kilépés</button>
+    </div>
+
+    <div id="authModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.55); align-items:center; justify-content:center; padding:24px; z-index:9999;">
+      <div style="width:min(520px, 92vw); background:var(--panel); color:var(--text); border-radius:20px; border:3px solid #2b2b2b; padding:18px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+          <div style="font-weight:900; font-size:18px;">Fiók</div>
+          <button id="authCloseBtn" class="btn btn-outline" style="padding:8px 12px;">Bezárás</button>
+        </div>
+
+        <div style="display:flex; gap:10px; margin-top:12px;">
+          <button id="tabLogin" class="btn btn-theme" style="flex:1;">Belépés</button>
+          <button id="tabRegister" class="btn btn-outline" style="flex:1;">Regisztráció</button>
+        </div>
+
+        <div id="authMsg" style="margin-top:12px; color:var(--muted); min-height:20px;"></div>
+
+        <form id="loginForm" style="margin-top:10px; display:block;">
+          <label class="label">E-mail</label>
+          <input class="input" name="email" type="email" autocomplete="email" required />
+          <label class="label" style="margin-top:10px;">Jelszó</label>
+          <input class="input" name="password" type="password" autocomplete="current-password" required />
+          <button class="btn btn-theme" type="submit" style="margin-top:14px; width:100%;">Belépés</button>
+          <button id="forgotBtn" class="btn btn-outline" type="button" style="margin-top:10px; width:100%;">Elfelejtett jelszó</button>
+        </form>
+
+        <form id="registerForm" style="margin-top:10px; display:none;">
+          <label class="label">Név</label>
+          <input class="input" name="name" type="text" autocomplete="name" required />
+          <label class="label" style="margin-top:10px;">E-mail</label>
+          <input class="input" name="email" type="email" autocomplete="email" required />
+          <label class="label" style="margin-top:10px;">Jelszó</label>
+          <input class="input" name="password" type="password" autocomplete="new-password" required />
+          <button class="btn btn-theme" type="submit" style="margin-top:14px; width:100%;">Regisztráció</button>
+          <div style="margin-top:10px; font-size:12px; color:var(--muted);">
+            Regisztráció után e-mailben küldünk megerősítő linket.
+          </div>
+        </form>
+
+        <form id="forgotForm" style="margin-top:10px; display:none;">
+          <label class="label">E-mail</label>
+          <input class="input" name="email" type="email" autocomplete="email" required />
+          <button class="btn btn-theme" type="submit" style="margin-top:14px; width:100%;">Jelszó reset link küldése</button>
+          <button id="backToLoginBtn" class="btn btn-outline" type="button" style="margin-top:10px; width:100%;">Vissza</button>
+        </form>
+      </div>
+    </div>
+
 
   <script>
     // Több intro videó esetén random választ.
@@ -77,5 +129,6 @@ video.addEventListener("ended", () => {
   playRandomVideo();
 });
 </script>
+  <script src="intro-auth.js"></script>
 </body>
 </html>

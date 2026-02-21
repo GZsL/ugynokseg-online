@@ -1,3 +1,16 @@
+(async function(){
+  try{
+    const r = await fetch('/api/auth/me', { credentials: 'include' });
+    if(!r.ok){
+      location.href = 'intro.html?auth=1';
+      return;
+    }
+  }catch(e){
+    location.href = 'intro.html?auth=1';
+    return;
+  }
+})();
+
 const CHARACTERS = [
   { key:"VETERAN", name:"Veterán", img:"assets/characters/veteran.png" },
   { key:"LOGISTIC", name:"Logisztikus", img:"assets/characters/logisztikus.png" },
@@ -57,7 +70,6 @@ async function createRoom(){
     return;
   }
 
-  try{ if(typeof setSession==='function') setSession(data.room, data.token); }catch(e){}
   location.href = `lobby.html?room=${encodeURIComponent(data.room)}&token=${encodeURIComponent(data.token)}`;
 }
 

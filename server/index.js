@@ -1,39 +1,25 @@
 const path = require('path');
 const http = require('http');
 const express = require('express');
+const cookieParser = require('cookie-parser');
+const cors = require('cors');
 const { Server } = require('socket.io');
 const Engine = require('./engine-core');
+const authRoutes = require('./auth-routes');
+const { requireAuth } = require('./auth-middleware');
 const nodemailer = require('nodemailer');
-const cookieParser = require('cookie-parser');
-const { makeRouter } = require('./auth-routes');
 
 const app = express();
-app.set('trust proxy', true);
-app.use(express.json({ limit: '1mb' }));
+app.set('trust proxy', 1);
 app.use(cookieParser());
-
-// Basic CORS for API routes (internet-friendly). Configure via CORS_ORIGINS (comma-separated).
-const CORS_ORIGINS = String(process.env.CORS_ORIGINS || '').split(',').map(s=>s.trim()).filter(Boolean);
-app.use((req,res,next)=>{
-  const origin = req.headers.origin;
-  if(origin && (CORS_ORIGINS.length===0 || CORS_ORIGINS.includes(origin))){
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Vary', 'Origin');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-    if(req.method==='OPTIONS') return res.sendStatus(204);
-  }
-  next();
-});
+app.use(cors({ origin: (process.env.CORS_ORIGINS || '').split(',').map(s=>s.trim()).filter(Boolean).length ? (process.env.CORS_ORIGINS || '').split(',').map(s=>s.trim()) : true, credentials: true }));
+app.use(express.json({ limit: '1mb' }));
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 app.use(express.static(PUBLIC_DIR));
 
 // Auth API
-const { router: authRouter } = makeRouter(express);
-app.use('/api/auth', authRouter);
-
+app.use('/api/auth', authRoutes);
 
 // Default entry
 app.get('/', (req,res)=>{
@@ -53,22 +39,6 @@ app.get('/', (req,res)=>{
  */
 /** @type {Map<string, any>} */
 const rooms = new Map();
-
-// Room cleanup (internet-friendly): remove stale, empty rooms.
-const ROOM_TTL_MS = parseInt(process.env.ROOM_TTL_MS || String(6*60*60*1000), 10); // default 6h
-const ROOM_CLEANUP_INTERVAL_MS = parseInt(process.env.ROOM_CLEANUP_INTERVAL_MS || String(5*60*1000), 10); // default 5m
-
-setInterval(()=>{
-  const now = Date.now();
-  for(const [code, r] of rooms.entries()){
-    const tooOld = (now - (r.createdAt||now)) > ROOM_TTL_MS;
-    const players = r.players || [];
-    const anyConnected = players.some(p=>p && p.connected);
-    if(tooOld && !anyConnected){
-      rooms.delete(code);
-    }
-  }
-}, ROOM_CLEANUP_INTERVAL_MS).unref?.();
 
 
 function escapeHtml(str){
@@ -170,7 +140,7 @@ function startGame(roomCode){
 }
 
 // LEGACY: Create a new room from Setup page (starts game immediately)
-app.post('/api/create-room', (req, res) => {
+app.post('/api/create-room', requireAuth,  (req, res) => {
   try{
     const configs = (req.body && req.body.configs) ? req.body.configs : null;
     if(!Array.isArray(configs) || configs.length < 2 || configs.length > 4){
@@ -212,7 +182,7 @@ app.post('/api/create-room', (req, res) => {
 });
 
 // NEW: create lobby room (token-based)
-app.post('/api/create-room-lobby', (req, res) => {
+app.post('/api/create-room-lobby', requireAuth,  (req, res) => {
   try{
     const b = req.body || {};
     const name = String(b.name||'').trim();
@@ -252,9 +222,9 @@ app.post('/api/join-room', (req, res) => {
     }
 
     return res.json({
-      room,
+      room: out.code,
       token: out.token,
-      lobbyUrl: `/lobby.html?room=${encodeURIComponent(room)}&token=${encodeURIComponent(out.token)}`
+      lobbyUrl: `/lobby.html?room=${encodeURIComponent(out.code)}&token=${encodeURIComponent(out.token)}`
     });
   }catch(e){
     console.error(e);
@@ -263,7 +233,7 @@ app.post('/api/join-room', (req, res) => {
 });
 
 // NEW: send invite email(s) (host only)
-app.post('/api/send-invite', async (req, res) => {
+app.post('/api/send-invite', requireAuth,  async (req, res) => {
   try{
     const b = req.body || {};
     const room = String(b.room||'').trim().toUpperCase();
@@ -348,15 +318,7 @@ app.post('/api/send-invite', async (req, res) => {
 });
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: {
-    origin: (origin, cb)=>{
-      if(!origin) return cb(null, true);
-      if(CORS_ORIGINS.length===0) return cb(null, true);
-      return cb(null, CORS_ORIGINS.includes(origin));
-    },
-    methods: ['GET','POST'],
-    credentials: true
-  }
+  cors: { origin: true, methods: ['GET','POST'] }
 });
 
 function getRoom(code){
@@ -392,21 +354,6 @@ function lobbySnapshot(roomCode){
       connected: !!p.connected
     }))
   };
-}
-
-function ensureLobbyHost(roomCode){
-  const r = rooms.get(roomCode);
-  if(!r || r.phase !== 'LOBBY') return;
-  const players = r.players || [];
-  if(!players.length) return;
-  const hostIdx = players.findIndex(p=>p && p.isHost);
-  const hostConnected = hostIdx >= 0 ? !!(players[hostIdx] && players[hostIdx].connected) : false;
-  if(hostConnected) return;
-
-  // Pick first connected player; fallback to first player.
-  let newIdx = players.findIndex(p=>p && p.connected);
-  if(newIdx < 0) newIdx = 0;
-  players.forEach((p,i)=>{ if(p) p.isHost = (i===newIdx); });
 }
 
 function stateForPlayer(state, meIndex){
@@ -544,9 +491,6 @@ io.on('connection', (socket) => {
   // mark connected
   if(r.players && r.players[playerIndex]) r.players[playerIndex].connected = true;
 
-  // If the previous host is gone, promote someone to host.
-  ensureLobbyHost(roomCode);
-
   // Send initial payload depending on phase
   if(r.phase === 'LOBBY'){
     socket.emit('lobby', lobbySnapshot(roomCode));
@@ -554,26 +498,6 @@ io.on('connection', (socket) => {
   }else if(r.phase === 'IN_GAME' && r.state){
     socket.emit('state', stateForPlayer(r.state, playerIndex));
   }
-
-  // Explicit snapshot request (internet-friendly reconnect):
-  // Clients can call this after a temporary disconnect/reconnect to resync.
-  socket.on('requestSnapshot', () => {
-    try{
-      const code = socket.data.roomCode;
-      const idx = socket.data.playerIndex;
-      const rr = rooms.get(code);
-      if(!rr) return;
-      if(rr.phase === 'LOBBY'){
-        socket.emit('lobby', lobbySnapshot(code));
-      }else if(rr.phase === 'IN_GAME' && rr.state){
-        socket.emit('state', stateForPlayer(rr.state, idx));
-      }else{
-        socket.emit('serverMsg', 'Nincs elérhető state (szoba lezárva).');
-      }
-    }catch(e){
-      // ignore
-    }
-  });
 
   // --- CHAT (ephemeral): announce join (no persistence) ---
   try{
@@ -686,10 +610,6 @@ setRoomState(code, next);
       if(r3 && r3.players && r3.players[idx]){
         r3.players[idx].connected = false;
         r3.players[idx]._wasConnected = false;
-
-        // If host left while in lobby, migrate host to keep room usable.
-        ensureLobbyHost(code);
-
         try{
           const nm = r3.players[idx].name || `Játékos ${idx+1}`;
           io.to(code).emit('chat', { type:'system', text:`${nm} kilépett.`, ts: Date.now() });
