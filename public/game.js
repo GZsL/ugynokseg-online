@@ -41,15 +41,6 @@ let state = (typeof loadState === "function") ? loadState() : null;
 const params = new URLSearchParams(location.search);
 const ROOM = (params.get('room') || '').toUpperCase();
 const TOKEN = params.get('token') || '';
-
-// If user refreshed and lost token in URL, try to restore from local session.
-try{
-  if(typeof ensureTokenInUrlOrRedirect==='function'){
-    ensureTokenInUrlOrRedirect('game.html');
-  }
-}catch(e){}
-
-try{ if(ROOM && TOKEN && typeof setSession==='function') setSession(ROOM, TOKEN); }catch(e){}
 let PLAYER_INDEX = Math.max(0, parseInt(params.get('player') || '0', 10) || 0);
 const IS_ONLINE = !!ROOM;
 
@@ -148,6 +139,11 @@ function attachSocket(){
   if(typeof io === 'function'){
     const query = TOKEN ? { room: ROOM, token: TOKEN } : { room: ROOM, player: String(PLAYER_INDEX) };
     socket = io({ query });
+
+    // On (re)connect ask server for the latest snapshot so refresh / network hiccups recover.
+    socket.on('connect', () => {
+      try{ socket.emit('requestSnapshot'); }catch(e){}
+    });
 
     socket.on('state', (s) => {
       const _prev = state;

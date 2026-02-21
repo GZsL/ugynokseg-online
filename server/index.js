@@ -6,22 +6,11 @@ const Engine = require('./engine-core');
 const nodemailer = require('nodemailer');
 
 const app = express();
-app.set('trust proxy', true);
 app.use(express.json({ limit: '1mb' }));
 
-// Basic CORS for API routes (internet-friendly). Configure via CORS_ORIGINS (comma-separated).
-const CORS_ORIGINS = String(process.env.CORS_ORIGINS || '').split(',').map(s=>s.trim()).filter(Boolean);
-app.use((req,res,next)=>{
-  const origin = req.headers.origin;
-  if(origin && (CORS_ORIGINS.length===0 || CORS_ORIGINS.includes(origin))){
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Vary', 'Origin');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-    if(req.method==='OPTIONS') return res.sendStatus(204);
-  }
-  next();
+// Simple health endpoint for Render / uptime checks
+app.get('/health', (req, res) => {
+  res.json({ ok: true, ts: Date.now() });
 });
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -46,17 +35,34 @@ app.get('/', (req,res)=>{
 /** @type {Map<string, any>} */
 const rooms = new Map();
 
-// Room cleanup (internet-friendly): remove stale, empty rooms.
-const ROOM_TTL_MS = parseInt(process.env.ROOM_TTL_MS || String(6*60*60*1000), 10); // default 6h
-const ROOM_CLEANUP_INTERVAL_MS = parseInt(process.env.ROOM_CLEANUP_INTERVAL_MS || String(5*60*1000), 10); // default 5m
+// ---- Room cleanup (internet-ready) ----
+const ROOM_TTL_MS = Math.max(
+  5 * 60 * 1000,
+  parseInt(process.env.ROOM_TTL_MS || String(6 * 60 * 60 * 1000), 10) || (6 * 60 * 60 * 1000)
+);
+const ROOM_CLEANUP_INTERVAL_MS = Math.max(
+  30 * 1000,
+  parseInt(process.env.ROOM_CLEANUP_INTERVAL_MS || String(5 * 60 * 1000), 10) || (5 * 60 * 1000)
+);
 
-setInterval(()=>{
+function hasAnyConnectedPlayer(room){
+  try{
+    return (room.players || []).some(p => p && p.connected);
+  }catch(e){
+    return false;
+  }
+}
+
+// periodic cleanup (does not keep games alive across restarts; add Redis later if needed)
+setInterval(() => {
   const now = Date.now();
-  for(const [code, r] of rooms.entries()){
-    const tooOld = (now - (r.createdAt||now)) > ROOM_TTL_MS;
-    const players = r.players || [];
-    const anyConnected = players.some(p=>p && p.connected);
-    if(tooOld && !anyConnected){
+  for (const [code, room] of rooms.entries()) {
+    if (!room) {
+      rooms.delete(code);
+      continue;
+    }
+    const age = now - (room.createdAt || now);
+    if (age > ROOM_TTL_MS && !hasAnyConnectedPlayer(room)) {
       rooms.delete(code);
     }
   }
@@ -339,15 +345,13 @@ app.post('/api/send-invite', async (req, res) => {
   }
 });
 const server = http.createServer(app);
+
+// CORS: restrict origins in production (Render)
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || '').split(',').map(s=>s.trim()).filter(Boolean);
 const io = new Server(server, {
   cors: {
-    origin: (origin, cb)=>{
-      if(!origin) return cb(null, true);
-      if(CORS_ORIGINS.length===0) return cb(null, true);
-      return cb(null, CORS_ORIGINS.includes(origin));
-    },
-    methods: ['GET','POST'],
-    credentials: true
+    origin: CORS_ORIGINS.length ? CORS_ORIGINS : true,
+    methods: ['GET','POST']
   }
 });
 
@@ -384,21 +388,6 @@ function lobbySnapshot(roomCode){
       connected: !!p.connected
     }))
   };
-}
-
-function ensureLobbyHost(roomCode){
-  const r = rooms.get(roomCode);
-  if(!r || r.phase !== 'LOBBY') return;
-  const players = r.players || [];
-  if(!players.length) return;
-  const hostIdx = players.findIndex(p=>p && p.isHost);
-  const hostConnected = hostIdx >= 0 ? !!(players[hostIdx] && players[hostIdx].connected) : false;
-  if(hostConnected) return;
-
-  // Pick first connected player; fallback to first player.
-  let newIdx = players.findIndex(p=>p && p.connected);
-  if(newIdx < 0) newIdx = 0;
-  players.forEach((p,i)=>{ if(p) p.isHost = (i===newIdx); });
 }
 
 function stateForPlayer(state, meIndex){
@@ -536,9 +525,6 @@ io.on('connection', (socket) => {
   // mark connected
   if(r.players && r.players[playerIndex]) r.players[playerIndex].connected = true;
 
-  // If the previous host is gone, promote someone to host.
-  ensureLobbyHost(roomCode);
-
   // Send initial payload depending on phase
   if(r.phase === 'LOBBY'){
     socket.emit('lobby', lobbySnapshot(roomCode));
@@ -546,26 +532,6 @@ io.on('connection', (socket) => {
   }else if(r.phase === 'IN_GAME' && r.state){
     socket.emit('state', stateForPlayer(r.state, playerIndex));
   }
-
-  // Explicit snapshot request (internet-friendly reconnect):
-  // Clients can call this after a temporary disconnect/reconnect to resync.
-  socket.on('requestSnapshot', () => {
-    try{
-      const code = socket.data.roomCode;
-      const idx = socket.data.playerIndex;
-      const rr = rooms.get(code);
-      if(!rr) return;
-      if(rr.phase === 'LOBBY'){
-        socket.emit('lobby', lobbySnapshot(code));
-      }else if(rr.phase === 'IN_GAME' && rr.state){
-        socket.emit('state', stateForPlayer(rr.state, idx));
-      }else{
-        socket.emit('serverMsg', 'Nincs elérhető state (szoba lezárva).');
-      }
-    }catch(e){
-      // ignore
-    }
-  });
 
   // --- CHAT (ephemeral): announce join (no persistence) ---
   try{
@@ -648,6 +614,23 @@ setRoomState(code, next);
     }
   });
 
+  // Reconnect helper: client can request fresh snapshot
+  socket.on('requestSnapshot', async () => {
+    try{
+      const code = socket.data.roomCode;
+      const idx = socket.data.playerIndex;
+      const r = rooms.get(code);
+      if(!r) return;
+      if(r.phase === 'LOBBY'){
+        socket.emit('lobby', lobbySnapshot(code));
+      }else if(r.phase === 'IN_GAME' && r.state){
+        socket.emit('state', stateForPlayer(r.state, idx));
+      }
+    }catch(e){
+      // ignore
+    }
+  });
+
   // --- CHAT (ephemeral): room chat messages ---
   socket.on('chat', (msg) => {
     try{
@@ -679,9 +662,18 @@ setRoomState(code, next);
         r3.players[idx].connected = false;
         r3.players[idx]._wasConnected = false;
 
-        // If host left while in lobby, migrate host to keep room usable.
-        ensureLobbyHost(code);
-
+        // If host left in lobby, transfer host to first connected player (or first player)
+        if(r3.phase === 'LOBBY'){
+          const hostIdx = (r3.players||[]).findIndex(p=>p && p.isHost);
+          if(hostIdx === idx){
+            let newHostIdx = (r3.players||[]).findIndex(p=>p && p.connected);
+            if(newHostIdx < 0) newHostIdx = (r3.players||[]).findIndex(p=>p);
+            if(newHostIdx >= 0){
+              (r3.players||[]).forEach(p=>{ if(p) p.isHost = false; });
+              if(r3.players[newHostIdx]) r3.players[newHostIdx].isHost = true;
+            }
+          }
+        }
         try{
           const nm = r3.players[idx].name || `Játékos ${idx+1}`;
           io.to(code).emit('chat', { type:'system', text:`${nm} kilépett.`, ts: Date.now() });
