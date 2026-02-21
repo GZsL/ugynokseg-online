@@ -78,7 +78,6 @@ const res = await fetch('/api/create-room-lobby', {
     maxPlayers: parseInt(maxPlayers,10),
     password: password || null
   })
-});
   });
   const data = await res.json().catch(()=>null);
   if(!res.ok || !data || !data.room || !data.token){
