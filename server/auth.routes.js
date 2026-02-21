@@ -7,18 +7,9 @@ const router = express.Router();
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev_secret_change_me";
 const COOKIE_NAME = "ugynokseg_token";
-const IS_PROD = process.env.NODE_ENV === "production";
 
-const cookieOpts = {
-  httpOnly: true,
-  sameSite: "lax",
-  secure: IS_PROD,
-  maxAge: 1000 * 60 * 60 * 24 * 30 // 30 nap
-};
-
-function normalizeEmail(email) {
-  return String(email || "").trim().toLowerCase();
-}
+// 30 nap
+const COOKIE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 function signToken(user) {
   return jwt.sign(
@@ -28,21 +19,27 @@ function signToken(user) {
   );
 }
 
+function cookieOptions() {
+  return {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    maxAge: COOKIE_MAX_AGE_MS,
+    path: "/",
+  };
+}
+
 // REGISZTRÁCIÓ
 router.post("/register", async (req, res) => {
   try {
-    const email = normalizeEmail(req.body.email);
-    const password = String(req.body.password || "");
-    const name = String(req.body.name || "").trim();
+    const { email, password, name } = req.body || {};
 
-    if (!email || !email.includes("@")) {
-      return res.status(400).json({ error: "Hibás email." });
+    if (!email || !password || !name) {
+      return res.status(400).json({ error: "Hiányzó adat." });
     }
-    if (!password || password.length < 6) {
+
+    if (String(password).length < 6) {
       return res.status(400).json({ error: "A jelszó min. 6 karakter." });
-    }
-    if (!name || name.length < 2) {
-      return res.status(400).json({ error: "Add meg a neved." });
     }
 
     const existing = db.prepare("SELECT id FROM users WHERE email=?").get(email);
@@ -57,76 +54,60 @@ router.post("/register", async (req, res) => {
       "INSERT INTO users (email, display_name, password_hash, created_at) VALUES (?, ?, ?, ?)"
     ).run(email, name, hash, created_at);
 
-    const user = { id: info.lastInsertRowid, email, display_name: name };
-    const token = signToken(user);
+    const token = signToken({
+      id: info.lastInsertRowid,
+      email,
+      display_name: name,
+    });
 
-    res.cookie(COOKIE_NAME, token, cookieOpts);
-    res.json({ ok: true, user: { id: user.id, email: user.email, name: user.display_name } });
+    res.cookie(COOKIE_NAME, token, cookieOptions());
+    return res.json({ ok: true });
   } catch (err) {
-    console.error("REGISTER error:", err);
-    res.status(500).json({ error: "Szerver hiba." });
+    console.error("register error:", err);
+    return res.status(500).json({ error: "Szerver hiba." });
   }
 });
 
 // LOGIN
 router.post("/login", async (req, res) => {
   try {
-    const email = normalizeEmail(req.body.email);
-    const password = String(req.body.password || "");
-
-    if (!email || !password) {
-      return res.status(400).json({ error: "Hiányzó adat." });
-    }
+    const { email, password } = req.body || {};
 
     const row = db.prepare("SELECT * FROM users WHERE email=?").get(email);
-    if (!row) {
-      return res.status(401).json({ error: "Hibás email vagy jelszó." });
-    }
+    if (!row) return res.status(401).json({ error: "Hibás adatok." });
 
     const ok = await bcrypt.compare(password, row.password_hash);
-    if (!ok) {
-      return res.status(401).json({ error: "Hibás email vagy jelszó." });
-    }
+    if (!ok) return res.status(401).json({ error: "Hibás adatok." });
 
     const token = signToken(row);
-    res.cookie(COOKIE_NAME, token, cookieOpts);
-
-    res.json({
-      ok: true,
-      user: { id: row.id, email: row.email, name: row.display_name }
-    });
+    res.cookie(COOKIE_NAME, token, cookieOptions());
+    return res.json({ ok: true });
   } catch (err) {
-    console.error("LOGIN error:", err);
-    res.status(500).json({ error: "Szerver hiba." });
+    console.error("login error:", err);
+    return res.status(500).json({ error: "Szerver hiba." });
   }
 });
 
-// LOGOUT
+// LOGOUT (hasznos UX-hez)
 router.post("/logout", (req, res) => {
   res.clearCookie(COOKIE_NAME, {
-    httpOnly: true,
-    sameSite: cookieOpts.sameSite,
-    secure: cookieOpts.secure
+    path: "/",
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
   });
-  res.json({ ok: true });
+  return res.json({ ok: true });
 });
 
 // ME (ki van belépve)
 router.get("/me", (req, res) => {
-  const token = req.cookies[COOKIE_NAME];
+  const token = req.cookies && req.cookies[COOKIE_NAME];
   if (!token) return res.json({ user: null });
 
   try {
     const payload = jwt.verify(token, JWT_SECRET);
-    res.json({ user: payload });
-  } catch (err) {
-    // ha lejárt/hibás token, töröljük a cookie-t is, hogy ne ragadjon be
-    res.clearCookie(COOKIE_NAME, {
-      httpOnly: true,
-      sameSite: cookieOpts.sameSite,
-      secure: cookieOpts.secure
-    });
-    res.json({ user: null });
+    return res.json({ user: payload });
+  } catch (e) {
+    return res.json({ user: null });
   }
 });
 
