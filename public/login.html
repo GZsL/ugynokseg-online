@@ -1,24 +1,28 @@
-document.getElementById("loginForm").addEventListener("submit", async (e) => {
-  e.preventDefault();
+<!doctype html>
+<html lang="hu">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Bejelentkezés</title>
+  <link rel="stylesheet" href="/auth.css" />
+</head>
+<body class="auth-bg">
+  <div class="auth-card">
+    <h1>Bejelentkezés</h1>
 
-  const email = document.getElementById("email").value.trim();
-  const password = document.getElementById("password").value.trim();
+    <form id="loginForm" class="auth-form">
+      <label>Email</label>
+      <input id="email" type="email" autocomplete="email" required />
 
-  const res = await fetch("/api/auth/login", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ email, password })
-  });
+      <label>Jelszó</label>
+      <input id="password" type="password" autocomplete="current-password" required />
 
-  const data = await res.json();
+      <button type="submit" class="auth-btn">Belépés</button>
 
-  if (!res.ok) {
-    alert(data.error || "Hiba történt");
-    return;
-  }
+      <a class="auth-link" href="/register.html">Regisztráció</a>
+    </form>
+  </div>
 
-  localStorage.setItem("user", JSON.stringify(data.user));
-  window.location.href = "/lobby.html";
-});
+  <script src="/login.js" defer></script>
+</body>
+</html>
