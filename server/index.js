@@ -1,692 +1,264 @@
-const path = require('path');
-const http = require('http');
-const express = require('express');
-const { Server } = require('socket.io');
-const Engine = require('./engine-core');
-const nodemailer = require('nodemailer');
+const express = require("express");
+const http = require("http");
+const crypto = require("crypto");
+const cors = require("cors");
+const { Server } = require("socket.io");
+
+const { attachSocketGuards } = require("./socket-guard");
+// If you have a separate engine module, keep using it as before.
+// This file intentionally doesn't assume specific engine event names.
+// Your existing per-event handlers will continue to work, but now guarded.
 
 const app = express();
-app.use(express.json({ limit: '1mb' }));
+const server = http.createServer(app);
 
-// Simple health endpoint for Render / uptime checks
-app.get('/health', (req, res) => {
-  res.json({ ok: true, ts: Date.now() });
+// CORS for HTTP
+const corsOriginsRaw = process.env.CORS_ORIGINS || "";
+const corsOrigins = corsOriginsRaw
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+app.use(
+  corsOrigins.length
+    ? cors({ origin: corsOrigins, credentials: true })
+    : cors()
+);
+
+app.use(express.json());
+app.use(express.static("public"));
+
+const io = new Server(server, {
+  cors: corsOrigins.length ? { origin: corsOrigins, credentials: true } : undefined,
 });
 
-const PUBLIC_DIR = path.join(__dirname, '..', 'public');
-app.use(express.static(PUBLIC_DIR));
+const PORT = process.env.PORT || 3000;
 
-// Default entry
-app.get('/', (req,res)=>{
-  res.redirect('/intro.html');
-});
-
-// ---- In-memory room store (LAN / MVP) ----
-/**
- * Room shape:
- * {
- *   phase: 'LOBBY'|'IN_GAME'|'FINISHED',
- *   createdAt:number,
- *   options:{ maxPlayers:number, isPublic:boolean, password?:string|null },
- *   players: Array<{ id:string, name:string, characterKey:string, token:string, ready:boolean, isHost:boolean, connected:boolean }>,
- *   state: any|null
- * }
- */
-/** @type {Map<string, any>} */
+/* ===============================
+   ROOM STORAGE
+=================================*/
 const rooms = new Map();
 
-// ---- Room cleanup (internet-ready) ----
-const ROOM_TTL_MS = Math.max(
-  5 * 60 * 1000,
-  parseInt(process.env.ROOM_TTL_MS || String(6 * 60 * 60 * 1000), 10) || (6 * 60 * 60 * 1000)
-);
-const ROOM_CLEANUP_INTERVAL_MS = Math.max(
-  30 * 1000,
-  parseInt(process.env.ROOM_CLEANUP_INTERVAL_MS || String(5 * 60 * 1000), 10) || (5 * 60 * 1000)
-);
+/*
+room structure (minimal):
 
-function hasAnyConnectedPlayer(room){
-  try{
-    return (room.players || []).some(p => p && p.connected);
-  }catch(e){
-    return false;
-  }
+{
+  code,
+  createdAt,
+  hostToken,
+  players: Map(token -> { name, connected }),
+  phase: "LOBBY" | "GAME",
+  // optional:
+  gameState / state / engineState ...
+}
+*/
+
+function generateRoomCode() {
+  return crypto.randomBytes(3).toString("hex").toUpperCase();
+}
+function generateToken() {
+  return crypto.randomBytes(16).toString("hex");
 }
 
-// periodic cleanup (does not keep games alive across restarts; add Redis later if needed)
+function now() {
+  return Date.now();
+}
+
+function pickNewHost(room) {
+  if (!room?.players?.size) return null;
+  // Prefer connected player
+  for (const [token, p] of room.players.entries()) {
+    if (p && p.connected) return token;
+  }
+  // Otherwise first player
+  for (const [token] of room.players.entries()) return token;
+  return null;
+}
+
+/* ===============================
+   CLEANUP (TTL)
+=================================*/
+const ROOM_TTL_MS = Number(process.env.ROOM_TTL_MS || 6 * 60 * 60 * 1000); // 6h default
+const ROOM_CLEANUP_INTERVAL_MS = Number(process.env.ROOM_CLEANUP_INTERVAL_MS || 5 * 60 * 1000); // 5m default
+
 setInterval(() => {
-  const now = Date.now();
+  const t = now();
   for (const [code, room] of rooms.entries()) {
-    if (!room) {
-      rooms.delete(code);
-      continue;
-    }
-    const age = now - (room.createdAt || now);
-    if (age > ROOM_TTL_MS && !hasAnyConnectedPlayer(room)) {
+    const age = t - (room.createdAt || t);
+    const hasConnected =
+      room.players && room.players.size
+        ? Array.from(room.players.values()).some((p) => p && p.connected)
+        : false;
+
+    if (age > ROOM_TTL_MS && !hasConnected) {
       rooms.delete(code);
     }
   }
 }, ROOM_CLEANUP_INTERVAL_MS).unref?.();
 
+/* ===============================
+   HEALTHCHECK
+=================================*/
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    ok: true,
+    uptimeSec: Math.floor(process.uptime()),
+    rooms: rooms.size,
+    env: process.env.NODE_ENV || "dev",
+  });
+});
 
-function escapeHtml(str){
-  return String(str==null?"":str)
-    .replace(/&/g,'&amp;')
-    .replace(/</g,'&lt;')
-    .replace(/>/g,'&gt;')
-    .replace(/"/g,'&quot;')
-    .replace(/'/g,'&#039;');
-}
+/* ===============================
+   API
+=================================*/
+app.post("/api/create-room", (req, res) => {
+  const name = String(req.body?.name || "").trim();
+  if (!name) return res.status(400).json({ error: "Missing name" });
 
+  const code = generateRoomCode();
+  const token = generateToken();
 
-function makeRoomCode(len = 4){
-  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let out = '';
-  for(let i=0;i<len;i++) out += alphabet[Math.floor(Math.random()*alphabet.length)];
-  return out;
-}
-
-function uid(prefix='t'){
-  return prefix + '_' + Math.random().toString(16).slice(2) + '_' + Date.now().toString(16);
-}
-
-function createLobbyRoom({ hostName, hostCharacterKey, maxPlayers=4, isPublic=false, password=null }){
-  let code;
-  do{ code = makeRoomCode(4); }while(rooms.has(code));
-
-  const hostToken = uid('tok');
   const room = {
-    phase: 'LOBBY',
-    createdAt: Date.now(),
-    options: {
-      maxPlayers: Math.min(4, Math.max(2, parseInt(String(maxPlayers||4),10) || 4)),
-      isPublic: !!isPublic,
-      password: password ? String(password) : null // MVP: plain; later hash
-    },
-    players: [
-      {
-        id: 'p1',
-        name: String(hostName||'Host').trim() || 'Host',
-        characterKey: hostCharacterKey,
-        token: hostToken,
-        ready: true,
-        isHost: true,
-        connected: false
-      }
-    ],
-    state: null
+    code,
+    createdAt: now(),
+    hostToken: token,
+    players: new Map(),
+    phase: "LOBBY",
   };
 
+  room.players.set(token, { name, connected: false }); // connected once socket joins
   rooms.set(code, room);
-  return { code, token: hostToken };
-}
 
-function joinLobbyRoom({ roomCode, name, characterKey, password=null }){
-  const r = rooms.get(roomCode);
-  if(!r) return { error: 'Szoba nem található.' };
-  if(r.phase !== 'LOBBY') return { error: 'Ez a szoba már elindult.' };
-
-  if(r.options.password){
-    if(String(password||'') !== String(r.options.password)) return { error: 'Hibás jelszó.' };
-  }
-
-  if((r.players||[]).length >= (r.options.maxPlayers||4)){
-    return { error: 'A szoba megtelt.' };
-  }
-
-  const token = uid('tok');
-  const id = 'p' + String((r.players||[]).length + 1);
-  r.players.push({
-    id,
-    name: String(name||('Ügynök ' + id.slice(1))).trim() || ('Ügynök ' + id.slice(1)),
-    characterKey,
+  res.json({
+    room: code,
     token,
-    ready: false,
-    isHost: false,
-    connected: false
+    lobbyUrl: `/lobby.html?room=${encodeURIComponent(code)}&token=${encodeURIComponent(token)}`,
   });
+});
 
-  return { token };
-}
+app.post("/api/join-room", (req, res) => {
+  const code = String(req.body?.room || "").trim().toUpperCase();
+  const name = String(req.body?.name || "").trim();
 
-function startGame(roomCode){
-  const r = rooms.get(roomCode);
-  if(!r) return { error: 'Szoba nem található.' };
-  if(r.phase !== 'LOBBY') return { error: 'A játék már fut.' };
-  const players = r.players || [];
-  if(players.length < 2) return { error: 'Minimum 2 játékos kell.' };
-  const readyCount = players.filter(p=>p && p.ready).length;
-  if(readyCount < 2) return { error: 'Minimum 2 játékos legyen READY.' };
+  const room = rooms.get(code);
+  if (!room) return res.status(404).json({ error: "Room not found" });
+  if (!name) return res.status(400).json({ error: "Missing name" });
 
-  const configs = players.map(p=>({ name: p.name, characterKey: p.characterKey }));
-  let state = Engine.createGame(configs);
-  state = Engine.startTurn(state).next;
+  const token = generateToken();
+  room.players.set(token, { name, connected: false });
 
-  r.state = state;
-  r.phase = 'IN_GAME';
-  return { ok:true };
-}
+  res.json({
+    room: code,
+    token,
+    lobbyUrl: `/lobby.html?room=${encodeURIComponent(code)}&token=${encodeURIComponent(token)}`,
+  });
+});
 
-// LEGACY: Create a new room from Setup page (starts game immediately)
-app.post('/api/create-room', (req, res) => {
-  try{
-    const configs = (req.body && req.body.configs) ? req.body.configs : null;
-    if(!Array.isArray(configs) || configs.length < 2 || configs.length > 4){
-      return res.status(400).json({ error: '2–4 játékos szükséges.' });
-    }
-    for(const c of configs){
-      if(!c || typeof c.name !== 'string' || !c.name.trim()){
-        return res.status(400).json({ error: 'Minden játékosnak legyen neve.' });
+/* ===============================
+   SOCKET GUARDS (anti-cheat baseline)
+=================================*/
+attachSocketGuards(io, rooms, {
+  // allowlist can be extended here if you have non-turn UI events
+  maxPayloadBytes: 50_000,
+});
+
+/* ===============================
+   SOCKET LOGIC
+=================================*/
+io.on("connection", (socket) => {
+  socket.on("join-room", ({ roomCode, token }) => {
+    const code = String(roomCode || "").trim().toUpperCase();
+    const tkn = String(token || "").trim();
+
+    const room = rooms.get(code);
+    if (!room) return socket.emit("errorMessage", { error: "ROOM_NOT_FOUND" });
+
+    const player = room.players.get(tkn);
+    if (!player) return socket.emit("errorMessage", { error: "INVALID_TOKEN" });
+
+    socket.join(code);
+    socket.data.roomCode = code;
+    socket.data.token = tkn;
+
+    // mark connected
+    player.connected = true;
+
+    // host migration in lobby if needed
+    if (room.phase === "LOBBY") {
+      const hostPlayer = room.players.get(room.hostToken);
+      if (!hostPlayer || hostPlayer.connected === false) {
+        const newHost = pickNewHost(room);
+        if (newHost) room.hostToken = newHost;
       }
-      if(!c.characterKey){
-        return res.status(400).json({ error: 'Minden játékosnak válassz karaktert.' });
-      }
     }
-    // Create a lobby room, auto-fill players, then start game.
-    const host = configs[0];
-    const created = createLobbyRoom({
-      hostName: host.name.trim(),
-      hostCharacterKey: host.characterKey,
-      maxPlayers: configs.length,
-      isPublic: false,
-      password: null
+
+    // broadcast basic lobby snapshot
+    io.to(code).emit("lobbyUpdate", {
+      room: code,
+      hostToken: room.hostToken,
+      players: Array.from(room.players.entries()).map(([pt, p]) => ({
+        token: pt,
+        name: p?.name || "Player",
+        connected: !!p?.connected,
+      })),
+      phase: room.phase,
     });
+  });
 
-    const r = rooms.get(created.code);
-    // Add the remaining players as auto-joined "LAN seats"
-    for(let i=1;i<configs.length;i++){
-      joinLobbyRoom({ roomCode: created.code, name: configs[i].name.trim(), characterKey: configs[i].characterKey, password:null });
-      // mark them ready (legacy setup assumes all present)
-      const pl = r.players[i];
-      if(pl) pl.ready = true;
-    }
-    startGame(created.code);
+  socket.on("requestSnapshot", () => {
+    const code = socket.data?.roomCode;
+    const token = socket.data?.token;
+    if (!code || !token) return;
 
-    return res.json({ room: created.code });
-  }catch(e){
-    console.error(e);
-    return res.status(500).json({ error: 'Szerver hiba a szoba létrehozásakor.' });
-  }
-});
+    const room = rooms.get(code);
+    if (!room) return;
 
-// NEW: create lobby room (token-based)
-app.post('/api/create-room-lobby', (req, res) => {
-  try{
-    const b = req.body || {};
-    const name = String(b.name||'').trim();
-    const characterKey = String(b.characterKey||'').trim();
-    const maxPlayers = b.maxPlayers;
-    const password = (b.password!=null && String(b.password).trim()) ? String(b.password).trim() : null;
-    const isPublic = !!b.isPublic;
-
-    if(!name) return res.status(400).json({ error: 'Adj meg nevet.' });
-    if(!characterKey) return res.status(400).json({ error: 'Válassz karaktert.' });
-
-    const created = createLobbyRoom({ hostName:name, hostCharacterKey:characterKey, maxPlayers, isPublic, password });
-    const inviteLink = `/join.html?room=${created.code}`;
-    return res.json({ room: created.code, token: created.token, inviteLink });
-  }catch(e){
-    console.error(e);
-    return res.status(500).json({ error: 'Szerver hiba a szoba létrehozásakor.' });
-  }
-});
-
-// NEW: join lobby room
-app.post('/api/join-room', (req, res) => {
-  try{
-    const b = req.body || {};
-    const room = String(b.room||'').trim().toUpperCase();
-    const name = String(b.name||'').trim();
-    const characterKey = String(b.characterKey||'').trim();
-    const password = (b.password!=null && String(b.password).trim()) ? String(b.password).trim() : null;
-
-    if(!room) return res.status(400).json({ error: 'Adj meg szoba kódot.' });
-    if(!name) return res.status(400).json({ error: 'Adj meg nevet.' });
-    if(!characterKey) return res.status(400).json({ error: 'Válassz karaktert.' });
-
-    const out = joinLobbyRoom({ roomCode: room, name, characterKey, password });
-    if(out && out.error){
-      return res.status(out.status || 400).json({ error: out.error });
-    }
-
-    return res.json({
-      room,
-      token: out.token,
-      lobbyUrl: `/lobby.html?room=${encodeURIComponent(room)}&token=${encodeURIComponent(out.token)}`
+    // send a conservative snapshot; if you already have a better snapshot builder, use it here
+    socket.emit("snapshot", {
+      room: code,
+      hostToken: room.hostToken,
+      players: Array.from(room.players.entries()).map(([pt, p]) => ({
+        token: pt,
+        name: p?.name || "Player",
+        connected: !!p?.connected,
+      })),
+      phase: room.phase,
+      // optional engine state (if present)
+      state: room.gameState || room.state || room.engineState || null,
     });
-  }catch(e){
-    console.error(e);
-    return res.status(500).json({ error: 'Szerver hiba a csatlakozáskor.' });
-  }
-});
+  });
 
-// NEW: send invite email(s) (host only)
-app.post('/api/send-invite', async (req, res) => {
-  try{
-    const b = req.body || {};
-    const room = String(b.room||'').trim().toUpperCase();
-    const token = String(b.token||'').trim();
-    const emails = Array.isArray(b.emails) ? b.emails.map(x=>String(x||'').trim()).filter(Boolean) : [];
+  socket.on("disconnect", () => {
+    const code = socket.data?.roomCode;
+    const token = socket.data?.token;
+    if (!code || !token) return;
 
-    if(!room) return res.status(400).json({ error: 'Hiányzik a szobakód.' });
-    if(!token) return res.status(400).json({ error: 'Hiányzik a token.' });
-    if(!emails.length) return res.status(400).json({ error: 'Adj meg legalább 1 e-mail címet.' });
+    const room = rooms.get(code);
+    if (!room) return;
 
-    const r = rooms.get(room);
-    if(!r) return res.status(404).json({ error: 'Szoba nem található.' });
+    const player = room.players.get(token);
+    if (player) player.connected = false;
 
-    const hostPlayer = (r.players||[]).find(p => p && p.token === token);
-    if(!hostPlayer) return res.status(403).json({ error: 'Érvénytelen token ehhez a szobához.' });
-    if(!hostPlayer.isHost) return res.status(403).json({ error: 'Csak a host küldhet meghívót.' });
-
-    const SMTP_HOST = process.env.SMTP_HOST;
-    const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587', 10);
-    const SMTP_USER = process.env.SMTP_USER;
-    const SMTP_PASS = process.env.SMTP_PASS;
-    const SMTP_SECURE = String(process.env.SMTP_SECURE||'').toLowerCase()==='true';
-    const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER;
-
-    if(!SMTP_HOST || !SMTP_USER || !SMTP_PASS){
-      return res.status(400).json({
-        error: 'E-mail küldés nincs beállítva a szerveren (SMTP_HOST/SMTP_USER/SMTP_PASS env hiányzik).'
-      });
+    // host migration in lobby (and safe for game too)
+    const hostPlayer = room.players.get(room.hostToken);
+    if (!hostPlayer || hostPlayer.connected === false) {
+      const newHost = pickNewHost(room);
+      if (newHost) room.hostToken = newHost;
     }
 
-    // Build absolute join link (Render + proxies safe)
-    const proto = (req.get('x-forwarded-proto') || req.protocol || 'https');
-    const hostHeader = req.get('x-forwarded-host') || req.get('host');
-    const base = `${proto}://${hostHeader}`;
-    const joinLink = `${base}/join.html?room=${encodeURIComponent(room)}`;
-
-    const subject = `Meghívó: Ügynökség – Szobakód: ${room}`;
-    const text = `${hostPlayer.name} meghívót küldött az ÜGYNÖKSÉGHEZ!\n\nKattints a linkre, válassz karaktert és indulhat a nyomozás:\n${joinLink}\n\nSzobakód: ${room}`;
-    const html = `
-      <div style="font-family:Arial,Helvetica,sans-serif; line-height:1.45;">
-        <p><b>${escapeHtml(hostPlayer.name)}</b> meghívót küldött az <b>ÜGYNÖKSÉGHEZ</b>!</p>
-        <p>Kattints a linkre, válassz karaktert és indulhat a nyomozás:</p>
-        <p><a href="${joinLink}">${joinLink}</a></p>
-        <p><b>Szobakód:</b> ${escapeHtml(room)}</p>
-        <p style="opacity:.75; font-size:12px;">Ha nem te vártad ezt a levelet, nyugodtan hagyd figyelmen kívül.</p>
-      </div>
-    `;
-
-    const transporter = nodemailer.createTransport({
-      host: SMTP_HOST,
-      port: SMTP_PORT,
-      secure: SMTP_SECURE,
-      auth: { user: SMTP_USER, pass: SMTP_PASS }
+    io.to(code).emit("lobbyUpdate", {
+      room: code,
+      hostToken: room.hostToken,
+      players: Array.from(room.players.entries()).map(([pt, p]) => ({
+        token: pt,
+        name: p?.name || "Player",
+        connected: !!p?.connected,
+      })),
+      phase: room.phase,
     });
-
-    const results = [];
-    for(const to of emails){
-      if(!/^.+@.+\..+$/.test(to)){
-        results.push({ to, ok:false, error:'invalid_email' });
-        continue;
-      }
-      try{
-        const info = await transporter.sendMail({
-          from: SMTP_FROM,
-          to,
-          subject,
-          text,
-          html
-        });
-        results.push({ to, ok:true, messageId: info && info.messageId ? info.messageId : null });
-      }catch(err){
-        console.error('sendMail error', to, err && err.message ? err.message : err);
-        results.push({ to, ok:false, error:'send_failed' });
-      }
-    }
-
-    return res.json({ ok:true, results });
-  }catch(e){
-    console.error(e);
-    return res.status(500).json({ error: 'Szerver hiba e-mail küldés közben.' });
-  }
-});
-const server = http.createServer(app);
-
-// CORS: restrict origins in production (Render)
-const CORS_ORIGINS = (process.env.CORS_ORIGINS || '').split(',').map(s=>s.trim()).filter(Boolean);
-const io = new Server(server, {
-  cors: {
-    origin: CORS_ORIGINS.length ? CORS_ORIGINS : true,
-    methods: ['GET','POST']
-  }
-});
-
-function getRoom(code){
-  const r = rooms.get(code);
-  return r ? r.state : null;
-}
-function setRoomState(code, state){
-  const r = rooms.get(code);
-  if(!r) return;
-  r.state = state;
-}
-
-function broadcastState(code){
-  // Broadcast per-player privacy-safe state
-  const r = rooms.get(code);
-  if(!r || !r.state) return;
-  broadcastStatePerPlayer(code);
-}
-
-function lobbySnapshot(roomCode){
-  const r = rooms.get(roomCode);
-  if(!r) return null;
-  return {
-    room: roomCode,
-    phase: r.phase,
-    options: { maxPlayers: r.options.maxPlayers, isPublic: r.options.isPublic, hasPassword: !!r.options.password },
-    players: (r.players||[]).map(p=>({
-      id: p.id,
-      name: p.name,
-      characterKey: p.characterKey,
-      ready: !!p.ready,
-      isHost: !!p.isHost,
-      connected: !!p.connected
-    }))
-  };
-}
-
-function stateForPlayer(state, meIndex){
-  // Privacy MVP: hide other players' tableCards and raw deck arrays
-  const s = JSON.parse(JSON.stringify(state));
-
-  // Optional: profiler peek needs top 2 mixed cards (only for profiler who can peek)
-  try{
-    const me = (state.players||[])[meIndex];
-    const canPeek = !!(me && me.characterKey==='PROFILER' && me.flags && me.flags.profilerPeekAvailable && !me.flags.profilerPeekUsed);
-    if(canPeek && Array.isArray(state.mixedDeck) && state.mixedDeck.length>=2){
-      s.mixedDeckTop2 = [ state.mixedDeck[0], state.mixedDeck[1] ];
-    }
-  }catch(e){ /* ignore */ }
-
-  // Remove full decks; keep counts
-  if(Array.isArray(s.mixedDeck)) s.mixedDeckCount = s.mixedDeck.length;
-  if(Array.isArray(s.itemDeck)) s.itemDeckCount = s.itemDeck.length;
-  if(Array.isArray(s.skillDeck)) s.skillDeckCount = s.skillDeck.length;
-  delete s.mixedDeck;
-  delete s.itemDeck;
-  delete s.skillDeck;
-
-  const players = s.players || [];
-  players.forEach((p, idx)=>{
-    if(!p) return;
-    if(idx !== meIndex){
-      // Hide exact cards; keep counts
-      const handCount = Array.isArray(p.tableCards) ? p.tableCards.length : 0;
-      p.tableCards = [];
-      p.handCount = handCount;
-      // Fixed items: keep minimal public info
-      if(Array.isArray(p.fixedItems)){
-        p.fixedItems = p.fixedItems.map(it=> it ? ({ kind:'item', name: it.name, rarity: it.rarity, fixed:true, permanent:true }) : it);
-      }
-    }
-  });
-
-  s._meIndex = meIndex;
-  s._meId = players[meIndex] ? players[meIndex].id : null;
-  return s;
-}
-
-async function broadcastStatePerPlayer(roomCode){
-  const r = rooms.get(roomCode);
-  if(!r || !r.state) return;
-  const sockets = await io.in(roomCode).fetchSockets();
-  for(const sock of sockets){
-    const idx = sock.data && typeof sock.data.playerIndex === 'number' ? sock.data.playerIndex : 0;
-    sock.emit('state', stateForPlayer(r.state, idx));
-  }
-}
-
-function isActionAllowed(state, playerIndex, type){
-  if(!state || !state.players) return false;
-
-  // During elimination pause, only the eliminated player may ACK
-  if(state.turn && state.turn.phase === 'ELIMINATION_PAUSE'){
-    if(type !== 'ACK_ELIMINATION') return false;
-    const last = state._lastEliminated;
-    const p = state.players[playerIndex];
-    return !!(last && p && p.id === last.id);
-  }
-
-  // Game over: no actions
-  if(state.turn && state.turn.phase === 'GAME_OVER') return false;
-
-  // Normal: only current player can act
-  return playerIndex === (state.currentPlayerIndex || 0);
-}
-
-function applyAction(state, type, payload){
-  payload = payload || {};
-  switch(type){
-    case 'PRE_DRAW':
-      return Engine.doPreDraw(state);
-    case 'ROLL':
-      return Engine.doRollAndDraw(state);
-    case 'ATTEMPT_CASE':
-      return Engine.attemptCase(state, payload);
-    case 'PROFILER_PEEK':
-      return Engine.profilerPeek(state, { keep: payload.keep });
-    case 'PASS':
-      return Engine.beginPassToEndTurn(state);
-    case 'END_TURN':
-      return Engine.endTurn(state, Array.isArray(payload.discardIds) ? payload.discardIds : []);
-    case 'ACK_ELIMINATION':
-      return Engine.ackElimination(state);
-    default:
-      return { next: state, log: 'Ismeretlen akció.' };
-  }
-}
-
-io.on('connection', (socket) => {
-  const { room, token, player } = socket.handshake.query || {};
-  const roomCode = String(room || '').trim().toUpperCase();
-
-  if(!roomCode || !rooms.has(roomCode)){
-    socket.emit('serverMsg', 'Szoba nem található.');
-    socket.disconnect(true);
-    return;
-  }
-
-  const r = rooms.get(roomCode);
-  if(!r){
-    socket.emit('serverMsg', 'Szoba nem található.');
-    socket.disconnect(true);
-    return;
-  }
-
-  // Token path (new)
-  let playerIndex = -1;
-  if(token){
-    const tok = String(token);
-    playerIndex = (r.players||[]).findIndex(p=>p && p.token===tok);
-    if(playerIndex < 0){
-      socket.emit('serverMsg', 'Érvénytelen token ehhez a szobához.');
-      socket.disconnect(true);
-      return;
-    }
-  }else{
-    // Legacy path (player index)
-    playerIndex = Math.max(0, parseInt(String(player || '0'), 10) || 0);
-    if(r.phase !== 'IN_GAME' || !r.state || !r.state.players || playerIndex >= r.state.players.length){
-      socket.emit('serverMsg', 'Érvénytelen játékos index ehhez a szobához.');
-      socket.disconnect(true);
-      return;
-    }
-  }
-
-  socket.join(roomCode);
-  socket.data.roomCode = roomCode;
-  socket.data.playerIndex = playerIndex;
-
-  // mark connected
-  if(r.players && r.players[playerIndex]) r.players[playerIndex].connected = true;
-
-  // Send initial payload depending on phase
-  if(r.phase === 'LOBBY'){
-    socket.emit('lobby', lobbySnapshot(roomCode));
-    io.to(roomCode).emit('lobby', lobbySnapshot(roomCode));
-  }else if(r.phase === 'IN_GAME' && r.state){
-    socket.emit('state', stateForPlayer(r.state, playerIndex));
-  }
-
-  // --- CHAT (ephemeral): announce join (no persistence) ---
-  try{
-    if(r.players && r.players[playerIndex]){
-      const was = !!r.players[playerIndex]._wasConnected;
-      r.players[playerIndex]._wasConnected = true;
-      if(!was){
-        const nm = r.players[playerIndex].name || `Játékos ${playerIndex+1}`;
-        io.to(roomCode).emit('chat', { type:'system', text:`${nm} csatlakozott.`, ts: Date.now() });
-      }
-    }
-  }catch(e){ /* ignore */ }
-
-  socket.on('action', (msg) => {
-    try{
-      const code = socket.data.roomCode;
-      const idx = socket.data.playerIndex;
-      const s0 = getRoom(code);
-      if(!s0) return;
-
-      const type = msg && msg.type ? String(msg.type) : '';
-      const payload = msg && msg.payload ? msg.payload : {};
-
-      if(!isActionAllowed(s0, idx, type)){
-        socket.emit('serverMsg', 'Most nem te vagy soron.');
-        return;
-      }
-
-	const res = applyAction(s0, type, payload);
-	let next = res && res.next ? res.next : s0;
-
-// ✅ Online: ugyanúgy fusson le az auto-capture, mint offline-ban
-if (Engine && typeof Engine.captureIfPossible === "function") {
-  next = Engine.captureIfPossible(next);
-}
-
-setRoomState(code, next);
-
-      if(res && res.log){
-        io.to(code).emit('serverMsg', res.log);
-      }
-      broadcastState(code);
-
-    }catch(e){
-      console.error(e);
-      socket.emit('serverMsg', 'Szerver hiba az akció feldolgozásakor.');
-    }
-  });
-
-  socket.on('lobbyAction', async (msg) => {
-    try{
-      const code = socket.data.roomCode;
-      const idx = socket.data.playerIndex;
-      const r2 = rooms.get(code);
-      if(!r2 || r2.phase !== 'LOBBY') return;
-      const p = (r2.players||[])[idx];
-      if(!p) return;
-
-      const type = msg && msg.type ? String(msg.type) : '';
-      if(type === 'TOGGLE_READY'){
-        p.ready = !p.ready;
-        io.to(code).emit('lobby', lobbySnapshot(code));
-      }
-      if(type === 'START_GAME'){
-        if(!p.isHost){
-          socket.emit('serverMsg', 'Csak a host indíthatja a játékot.');
-          return;
-        }
-        const out = startGame(code);
-        if(out && out.error){
-          socket.emit('serverMsg', out.error);
-          return;
-        }
-        io.to(code).emit('lobby', lobbySnapshot(code));
-        await broadcastStatePerPlayer(code);
-      }
-    }catch(e){
-      console.error(e);
-      socket.emit('serverMsg', 'Szerver hiba a lobby akciónál.');
-    }
-  });
-
-  // Reconnect helper: client can request fresh snapshot
-  socket.on('requestSnapshot', async () => {
-    try{
-      const code = socket.data.roomCode;
-      const idx = socket.data.playerIndex;
-      const r = rooms.get(code);
-      if(!r) return;
-      if(r.phase === 'LOBBY'){
-        socket.emit('lobby', lobbySnapshot(code));
-      }else if(r.phase === 'IN_GAME' && r.state){
-        socket.emit('state', stateForPlayer(r.state, idx));
-      }
-    }catch(e){
-      // ignore
-    }
-  });
-
-  // --- CHAT (ephemeral): room chat messages ---
-  socket.on('chat', (msg) => {
-    try{
-      const code = socket.data.roomCode;
-      const idx = socket.data.playerIndex;
-      if(!code) return;
-      const r = rooms.get(code);
-      if(!r) return;
-
-      const text = String((msg && msg.text) ? msg.text : '').trim();
-      if(!text) return;
-      const safe = text.slice(0, 200);
-
-      const p = (r.players||[])[idx] || {};
-      const name = String(p.name || `Játékos ${idx+1}`);
-
-      io.to(code).emit('chat', { type:'user', name, playerIndex: idx, text: safe, ts: Date.now() });
-    }catch(e){
-      // ignore
-    }
-  });
-
-  socket.on('disconnect', () => {
-    try{
-      const code = socket.data.roomCode;
-      const idx = socket.data.playerIndex;
-      const r3 = rooms.get(code);
-      if(r3 && r3.players && r3.players[idx]){
-        r3.players[idx].connected = false;
-        r3.players[idx]._wasConnected = false;
-
-        // If host left in lobby, transfer host to first connected player (or first player)
-        if(r3.phase === 'LOBBY'){
-          const hostIdx = (r3.players||[]).findIndex(p=>p && p.isHost);
-          if(hostIdx === idx){
-            let newHostIdx = (r3.players||[]).findIndex(p=>p && p.connected);
-            if(newHostIdx < 0) newHostIdx = (r3.players||[]).findIndex(p=>p);
-            if(newHostIdx >= 0){
-              (r3.players||[]).forEach(p=>{ if(p) p.isHost = false; });
-              if(r3.players[newHostIdx]) r3.players[newHostIdx].isHost = true;
-            }
-          }
-        }
-        try{
-          const nm = r3.players[idx].name || `Játékos ${idx+1}`;
-          io.to(code).emit('chat', { type:'system', text:`${nm} kilépett.`, ts: Date.now() });
-        }catch(e){ /* ignore */ }
-        io.to(code).emit('lobby', lobbySnapshot(code));
-      }
-    }catch(e){
-      // ignore
-    }
   });
 });
 
-const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`LAN server running: http://localhost:${PORT}`);
+  console.log(`Server listening on :${PORT}`);
 });
