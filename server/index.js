@@ -14,19 +14,16 @@ const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 app.use(express.static(PUBLIC_DIR));
 app.use("/api/auth", require("./auth.routes"));
 
-const jwt = require("jsonwebtoken");
+const COOKIE_NAME = "ugynokseg_token";
 
 function requireAuth(req, res, next){
-  const token = req.cookies && req.cookies.token;
-  if(!token){
-    return res.status(401).json({ error: "Login szükséges." });
-  }
+  const token = req.cookies[COOKIE_NAME];
+  if(!token) return res.status(401).json({ error: "Login szükséges." });
 
   try{
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded;
+    req.user = jwt.verify(token, process.env.JWT_SECRET);
     next();
-  }catch(e){
+  }catch{
     return res.status(401).json({ error: "Érvénytelen token." });
   }
 }
