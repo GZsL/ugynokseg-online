@@ -68,10 +68,17 @@ async function createRoom(){
   if(!name){ alert('Adj meg nevet.'); return; }
   if(!picked){ alert('Válassz karaktert.'); return; }
 
-  const res = await fetch('/api/create-room-lobby', {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ name, characterKey: picked, maxPlayers: parseInt(maxPlayers,10), password: password || null })
+const res = await fetch('/api/create-room-lobby', {
+  method:'POST',
+  headers:{'Content-Type':'application/json'},
+  credentials: 'include',
+  body: JSON.stringify({
+    name,
+    characterKey: picked,
+    maxPlayers: parseInt(maxPlayers,10),
+    password: password || null
+  })
+});
   });
   const data = await res.json().catch(()=>null);
   if(!res.ok || !data || !data.room || !data.token){
