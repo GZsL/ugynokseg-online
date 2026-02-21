@@ -25,7 +25,6 @@ function cookieOpts() {
   };
 }
 
-// REGISZTRÁCIÓ
 router.post("/register", async (req, res) => {
   try {
     const { email, password, name } = req.body || {};
@@ -33,35 +32,22 @@ router.post("/register", async (req, res) => {
     const pw = String(password || "");
     const nm = String(name || "").trim();
 
-    if (!em || !em.includes("@") || !nm || !pw) {
-      return res.status(400).json({ error: "Hiányzó adat." });
-    }
-    if (pw.length < 6) {
-      return res.status(400).json({ error: "A jelszó min. 6 karakter." });
-    }
+    if (!em || !em.includes("@") || !nm || !pw) return res.status(400).json({ error: "Hiányzó adat." });
+    if (pw.length < 6) return res.status(400).json({ error: "A jelszó min. 6 karakter." });
 
-    const existing = DB.getUserByEmail(em);
-    if (existing) {
-      return res.status(409).json({ error: "Email már létezik." });
-    }
+    if (DB.getUserByEmail(em)) return res.status(409).json({ error: "Email már létezik." });
 
     const hash = await bcrypt.hash(pw, 10);
     const user = DB.createUser({ email: em, display_name: nm, password_hash: hash });
 
     const token = signToken(user);
     res.cookie(COOKIE_NAME, token, cookieOpts());
-
-    return res.json({
-      ok: true,
-      user: { uid: user.id, email: user.email, name: user.display_name, elo: user.elo, wins: user.wins, losses: user.losses },
-    });
-  } catch (err) {
-    console.error("REGISTER ERR:", err);
+    return res.json({ ok: true, user: { uid: user.id, email: user.email, name: user.display_name } });
+  } catch (e) {
     return res.status(500).json({ error: "Szerver hiba." });
   }
 });
 
-// LOGIN
 router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body || {};
@@ -78,42 +64,32 @@ router.post("/login", async (req, res) => {
 
     const token = signToken(user);
     res.cookie(COOKIE_NAME, token, cookieOpts());
-
-    return res.json({
-      ok: true,
-      user: { uid: user.id, email: user.email, name: user.display_name, elo: user.elo, wins: user.wins, losses: user.losses },
-    });
-  } catch (err) {
-    console.error("LOGIN ERR:", err);
+    return res.json({ ok: true, user: { uid: user.id, email: user.email, name: user.display_name, elo: user.elo, wins: user.wins, losses: user.losses } });
+  } catch (e) {
     return res.status(500).json({ error: "Szerver hiba." });
   }
 });
 
-// LOGOUT
 router.post("/logout", (req, res) => {
   res.clearCookie(COOKIE_NAME, { path: "/" });
   res.json({ ok: true });
 });
 
-// ME
 router.get("/me", (req, res) => {
   const token = req.cookies && req.cookies[COOKIE_NAME];
   if (!token) return res.json({ user: null });
-
   try {
     const payload = jwt.verify(token, JWT_SECRET);
     return res.json({ user: payload });
-  } catch (e) {
+  } catch {
     return res.json({ user: null });
   }
 });
 
-// LEADERBOARD
 router.get("/leaderboard", (req, res) => {
   try {
     return res.json(DB.listLeaderboard(100));
-  } catch (err) {
-    console.error("LEADERBOARD ERR:", err);
+  } catch {
     return res.status(500).json({ error: "Szerver hiba." });
   }
 });

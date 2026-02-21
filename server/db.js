@@ -6,18 +6,13 @@ const DB_FILE = path.join(DATA_DIR, "users.json");
 
 function ensure() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-  if (!fs.existsSync(DB_FILE)) {
-    fs.writeFileSync(DB_FILE, JSON.stringify({ users: [] }, null, 2), "utf8");
-  }
+  if (!fs.existsSync(DB_FILE)) fs.writeFileSync(DB_FILE, JSON.stringify({ users: [] }, null, 2), "utf8");
 }
 
 function read() {
   ensure();
-  try {
-    return JSON.parse(fs.readFileSync(DB_FILE, "utf8"));
-  } catch (e) {
-    return { users: [] };
-  }
+  try { return JSON.parse(fs.readFileSync(DB_FILE, "utf8")); }
+  catch { return { users: [] }; }
 }
 
 function write(db) {
@@ -25,35 +20,27 @@ function write(db) {
   fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), "utf8");
 }
 
-function nowIso() {
-  return new Date().toISOString();
-}
-
 function uid() {
   return "u_" + Math.random().toString(16).slice(2) + "_" + Date.now().toString(16);
 }
 
 function getUserByEmail(email) {
+  const em = String(email || "").trim().toLowerCase();
   const db = read();
-  return db.users.find((u) => u.email === String(email || "").toLowerCase()) || null;
-}
-
-function getUserById(id) {
-  const db = read();
-  return db.users.find((u) => u.id === id) || null;
+  return db.users.find(u => u.email === em) || null;
 }
 
 function createUser({ email, display_name, password_hash }) {
   const db = read();
   const user = {
     id: uid(),
-    email: String(email || "").toLowerCase(),
-    display_name: String(display_name || ""),
+    email: String(email || "").trim().toLowerCase(),
+    display_name: String(display_name || "").trim(),
     password_hash: String(password_hash || ""),
-    created_at: nowIso(),
+    created_at: new Date().toISOString(),
     elo: 1000,
     wins: 0,
-    losses: 0,
+    losses: 0
   };
   db.users.push(user);
   write(db);
@@ -63,14 +50,9 @@ function createUser({ email, display_name, password_hash }) {
 function listLeaderboard(limit = 100) {
   const db = read();
   return [...db.users]
-    .sort((a, b) => (b.elo || 0) - (a.elo || 0) || (b.wins || 0) - (a.wins || 0))
+    .sort((a,b) => (b.elo||0)-(a.elo||0) || (b.wins||0)-(a.wins||0))
     .slice(0, limit)
-    .map((u) => ({ name: u.display_name, elo: u.elo, wins: u.wins, losses: u.losses }));
+    .map(u => ({ name: u.display_name, elo: u.elo, wins: u.wins, losses: u.losses }));
 }
 
-module.exports = {
-  getUserByEmail,
-  getUserById,
-  createUser,
-  listLeaderboard,
-};
+module.exports = { getUserByEmail, createUser, listLeaderboard };

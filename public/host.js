@@ -9,41 +9,49 @@ const CHARACTERS = [
 
 let picked = "VETERAN";
 
+async function ensureLoggedIn(){
+  const res = await fetch('/api/auth/me');
+  const data = await res.json().catch(()=>({user:null}));
+  if(!data.user){
+    location.href = `/login.html?next=${encodeURIComponent('/host.html')}`;
+    return false;
+  }
+  return true;
+}
+
 function renderChars(){
   const grid = document.getElementById('charGrid');
   if(!grid) return;
   grid.innerHTML = "";
-
   CHARACTERS.forEach(ch=>{
     const card = document.createElement('div');
     card.className = 'charCard' + (picked===ch.key ? ' picked' : '');
-
+    const imgWrap = document.createElement('div');
+    imgWrap.className = 'charImg';
     const img = document.createElement('img');
-    img.src = ch.img;
-    img.alt = ch.name;
-    img.draggable = false;
+    img.src = ch.img; img.alt = ch.name;
+    imgWrap.appendChild(img);
 
-    const name = document.createElement('div');
-    name.className = 'charName';
-    name.textContent = ch.name;
+    const btn = document.createElement('button');
+    btn.className = 'btn pickBtn';
+    const color = (typeof THEME_COLORS==='object' && THEME_COLORS[ch.key]) ? THEME_COLORS[ch.key] : '#f8bd01';
+    btn.style.background = color;
+    btn.style.color = '#111';
+    btn.textContent = (picked===ch.key) ? 'Kiválasztva' : 'Választom';
+    btn.onclick = ()=>{ picked = ch.key; renderChars(); };
 
-    card.appendChild(img);
-    card.appendChild(name);
-
-    card.addEventListener('click', ()=>{
-      picked = ch.key;
-      renderChars();
-    });
-
+    card.appendChild(imgWrap);
+    card.appendChild(btn);
     grid.appendChild(card);
   });
 }
 
 async function createRoom(){
-  const name = (document.getElementById('name')?.value || '').trim();
-  const maxPlayers = (document.getElementById('maxPlayers')?.value || '4').trim();
-  const password = (document.getElementById('password')?.value || '').trim();
+  if(!(await ensureLoggedIn())) return;
 
+  const name = (document.getElementById('name')?.value || '').trim();
+  const maxPlayers = document.getElementById('maxPlayers')?.value || '4';
+  const password = (document.getElementById('password')?.value || '').trim();
   if(!name){ alert('Adj meg nevet.'); return; }
   if(!picked){ alert('Válassz karaktert.'); return; }
 
@@ -54,15 +62,16 @@ async function createRoom(){
   });
 
   const data = await res.json().catch(()=>null);
+
+  if(res.status === 401){
+    location.href = `/login.html?next=${encodeURIComponent('/host.html')}`;
+    return;
+  }
+
   if(!res.ok || !data || !data.room || !data.token){
     alert((data && data.error) ? data.error : 'Nem sikerült szobát létrehozni.');
     return;
   }
-
-  // ✅ PERSIST room+token (refresh/new tab miatt)
-  try{
-    localStorage.setItem('ugynokseg_session', JSON.stringify({ room: data.room, token: data.token, ts: Date.now() }));
-  }catch(e){}
 
   location.href = `lobby.html?room=${encodeURIComponent(data.room)}&token=${encodeURIComponent(data.token)}`;
 }
@@ -72,3 +81,4 @@ document.getElementById('create')?.addEventListener('click', ()=>{
 });
 
 renderChars();
+ensureLoggedIn();
