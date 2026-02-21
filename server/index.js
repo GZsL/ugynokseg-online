@@ -6,7 +6,23 @@ const Engine = require('./engine-core');
 const nodemailer = require('nodemailer');
 
 const app = express();
+app.set('trust proxy', true);
 app.use(express.json({ limit: '1mb' }));
+
+// Basic CORS for API routes (internet-friendly). Configure via CORS_ORIGINS (comma-separated).
+const CORS_ORIGINS = String(process.env.CORS_ORIGINS || '').split(',').map(s=>s.trim()).filter(Boolean);
+app.use((req,res,next)=>{
+  const origin = req.headers.origin;
+  if(origin && (CORS_ORIGINS.length===0 || CORS_ORIGINS.includes(origin))){
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+    if(req.method==='OPTIONS') return res.sendStatus(204);
+  }
+  next();
+});
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 app.use(express.static(PUBLIC_DIR));
@@ -29,6 +45,22 @@ app.get('/', (req,res)=>{
  */
 /** @type {Map<string, any>} */
 const rooms = new Map();
+
+// Room cleanup (internet-friendly): remove stale, empty rooms.
+const ROOM_TTL_MS = parseInt(process.env.ROOM_TTL_MS || String(6*60*60*1000), 10); // default 6h
+const ROOM_CLEANUP_INTERVAL_MS = parseInt(process.env.ROOM_CLEANUP_INTERVAL_MS || String(5*60*1000), 10); // default 5m
+
+setInterval(()=>{
+  const now = Date.now();
+  for(const [code, r] of rooms.entries()){
+    const tooOld = (now - (r.createdAt||now)) > ROOM_TTL_MS;
+    const players = r.players || [];
+    const anyConnected = players.some(p=>p && p.connected);
+    if(tooOld && !anyConnected){
+      rooms.delete(code);
+    }
+  }
+}, ROOM_CLEANUP_INTERVAL_MS).unref?.();
 
 
 function escapeHtml(str){
@@ -212,9 +244,9 @@ app.post('/api/join-room', (req, res) => {
     }
 
     return res.json({
-      room: out.code,
+      room,
       token: out.token,
-      lobbyUrl: `/lobby.html?room=${encodeURIComponent(out.code)}&token=${encodeURIComponent(out.token)}`
+      lobbyUrl: `/lobby.html?room=${encodeURIComponent(room)}&token=${encodeURIComponent(out.token)}`
     });
   }catch(e){
     console.error(e);
@@ -308,7 +340,15 @@ app.post('/api/send-invite', async (req, res) => {
 });
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: true, methods: ['GET','POST'] }
+  cors: {
+    origin: (origin, cb)=>{
+      if(!origin) return cb(null, true);
+      if(CORS_ORIGINS.length===0) return cb(null, true);
+      return cb(null, CORS_ORIGINS.includes(origin));
+    },
+    methods: ['GET','POST'],
+    credentials: true
+  }
 });
 
 function getRoom(code){
@@ -344,6 +384,21 @@ function lobbySnapshot(roomCode){
       connected: !!p.connected
     }))
   };
+}
+
+function ensureLobbyHost(roomCode){
+  const r = rooms.get(roomCode);
+  if(!r || r.phase !== 'LOBBY') return;
+  const players = r.players || [];
+  if(!players.length) return;
+  const hostIdx = players.findIndex(p=>p && p.isHost);
+  const hostConnected = hostIdx >= 0 ? !!(players[hostIdx] && players[hostIdx].connected) : false;
+  if(hostConnected) return;
+
+  // Pick first connected player; fallback to first player.
+  let newIdx = players.findIndex(p=>p && p.connected);
+  if(newIdx < 0) newIdx = 0;
+  players.forEach((p,i)=>{ if(p) p.isHost = (i===newIdx); });
 }
 
 function stateForPlayer(state, meIndex){
@@ -481,6 +536,9 @@ io.on('connection', (socket) => {
   // mark connected
   if(r.players && r.players[playerIndex]) r.players[playerIndex].connected = true;
 
+  // If the previous host is gone, promote someone to host.
+  ensureLobbyHost(roomCode);
+
   // Send initial payload depending on phase
   if(r.phase === 'LOBBY'){
     socket.emit('lobby', lobbySnapshot(roomCode));
@@ -600,6 +658,10 @@ setRoomState(code, next);
       if(r3 && r3.players && r3.players[idx]){
         r3.players[idx].connected = false;
         r3.players[idx]._wasConnected = false;
+
+        // If host left while in lobby, migrate host to keep room usable.
+        ensureLobbyHost(code);
+
         try{
           const nm = r3.players[idx].name || `Játékos ${idx+1}`;
           io.to(code).emit('chat', { type:'system', text:`${nm} kilépett.`, ts: Date.now() });

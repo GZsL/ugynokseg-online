@@ -4,12 +4,45 @@ function deepClone(obj){
   return JSON.parse(JSON.stringify(obj));
 }
 
+
+// ================= RNG helpers (deterministic, server-authoritative) =================
+// Uses a simple xorshift32 RNG stored in state._rng (uint32).
+function _seedToUint32(seed){
+  const n = Number(seed);
+  if(Number.isFinite(n)) return (n >>> 0);
+  // hash string-ish seeds into uint32
+  const s = String(seed ?? "");
+  let h = 2166136261 >>> 0; // FNV-1a
+  for(let i=0;i<s.length;i++){
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h >>> 0;
+}
+function initRngState(seed){
+  let x = _seedToUint32(seed);
+  if(x === 0) x = 0xA341316C; // avoid zero lock
+  return x >>> 0;
+}
+function rand01FromState(s){
+  if(!s) return Math.random();
+  if(typeof s._rng !== "number") return Math.random();
+  // xorshift32
+  let x = s._rng >>> 0;
+  x ^= (x << 13) >>> 0;
+  x ^= (x >>> 17) >>> 0;
+  x ^= (x << 5) >>> 0;
+  s._rng = x >>> 0;
+  s._rngCalls = (s._rngCalls|0) + 1;
+  return (x >>> 0) / 4294967296;
+}
+
 // ================= Engine helpers =================
 function uid(prefix="c"){ return prefix+"_"+Math.random().toString(16).slice(2)+"_"+Date.now().toString(16); }
-function shuffle(arr){
+function shuffle(arr, rng=Math.random){
   const a = arr.slice();
   for(let i=a.length-1;i>0;i--){
-    const j = Math.floor(Math.random()*(i+1));
+    const j = Math.floor(rng()*(i+1));
     const tmp=a[i]; a[i]=a[j]; a[j]=tmp;
   }
   return a;
@@ -30,7 +63,7 @@ function refillDeckIfNeeded(state, deckKey, allowedKinds, neededCount){
   // vedd ki a dobóból a megfelelő lapokat
   s.discard = (s.discard||[]).filter(c => !allowedKinds.includes(c.kind));
   // keverd vissza a pakliba
-  s[deckKey] = shuffle(pool.concat(s[deckKey])); // a meglévő tetejét is összekeverjük, egyszerűsítés
+  s[deckKey] = shuffle(pool.concat(s[deckKey]), ()=>rand01FromState(s)); // a meglévő tetejét is összekeverjük, egyszerűsítés
 }
 
 function drawFromDeck(state, deckKey, n, allowedKinds){
@@ -40,10 +73,10 @@ function drawFromDeck(state, deckKey, n, allowedKinds){
   return d.drawn;
 }
 
-function rollDiceFaces(){
+function rollDiceFaces(state){
   const faces=["nyomozás","nyomozás","tárgy","tárgy","képesség","képesség"];
   const out=[];
-  for(let i=0;i<6;i++) out.push(faces[Math.floor(Math.random()*faces.length)]);
+  for(let i=0;i<6;i++) out.push(faces[Math.floor((rand01FromState(state))*faces.length)]);
   return out;
 }
 function rollToCounts(faces){
@@ -73,7 +106,7 @@ const ITEM_TYPE_DEFS = [
     { name:"Wildcard", rarity:"Joker", copies:2, wildcard:true, desc:"Helyettesít 1 szükséges tárgyat." }
 ];
 
-function makeSampleDecks(){
+function makeSampleDecks(rng=Math.random){
   const ITEM_TYPES = ITEM_TYPE_DEFS;
 
   const items = ITEM_TYPES.flatMap(t =>
@@ -203,11 +236,22 @@ function makeSampleDecks(){
 
 
   const mixed = cases.concat(thieves).concat(skills);
-  return { itemDeck: shuffle(items), skillDeck: [], mixedDeck: shuffle(mixed) };
+  return { itemDeck: shuffle(items, rng), skillDeck: [], mixedDeck: shuffle(mixed, rng) };
 }
 
-function createGame(playerConfigs){
-  const decks = makeSampleDecks();
+function createGame(playerConfigs, opts={}){
+  const seed = (opts && (opts.seed ?? opts.rngSeed)) ?? (Date.now() ^ Math.floor(Math.random()*1e9));
+  let __rng = initRngState(seed);
+  const __rand01 = ()=>{ // local deterministic RNG for initial deal
+    let x = __rng >>> 0;
+    x ^= (x << 13) >>> 0;
+    x ^= (x >>> 17) >>> 0;
+    x ^= (x << 5) >>> 0;
+    __rng = x >>> 0;
+    return (x >>> 0) / 4294967296;
+  };
+
+  const decks = makeSampleDecks(__rand01);
 
   let itemDeck = decks.itemDeck, skillDeck = decks.skillDeck, mixedDeck = decks.mixedDeck;
   const discard = [];
@@ -236,7 +280,7 @@ eliminated:false,
   const allThiefNames = mixedDeck.filter(c=>c.kind==="thief").map(t=>t.thiefName);
   for(const p of players){
     if(p.characterKey===CHARACTER_DEFS.NEMESIS.key){
-      p.nemesisThiefName = allThiefNames[Math.floor(Math.random()*allThiefNames.length)] || null;
+      p.nemesisThiefName = allThiefNames[Math.floor(__rand01()*allThiefNames.length)] || null;
     }
   }
 
@@ -270,7 +314,7 @@ eliminated:false,
   function randomItemType(rarity){
     const pool = rarity ? ITEM_TYPE_DEFS.filter(t=>t.rarity===rarity) : ITEM_TYPE_DEFS;
     if(!pool.length) return null;
-    return pool[Math.floor(Math.random()*pool.length)];
+    return pool[Math.floor(__rand01()*pool.length)];
   }
   function giveFixedRandomItems(p, count, uniqueByName=false, rarity=null){
     const have = new Set((p.fixedItems||[]).map(x=>x && x.name).filter(Boolean));
@@ -314,6 +358,9 @@ eliminated:false,
   }
 
   return {
+    rngSeed: seed,
+    _rng: __rng,
+    _rngCalls: 0,
     players,
     currentPlayerIndex:0,
     itemDeck,
@@ -418,7 +465,7 @@ function doRollAndDraw(state){
   // A kör eleji flagek resetje a startTurn() feladata.
   // Vegyes lap húzás nem a dobáshoz kötött (kör elején automatikus)
 
-  const faces = rollDiceFaces();
+  const faces = rollDiceFaces(s);
   const counts = rollToCounts(faces);
 
   if(counts.item>0){

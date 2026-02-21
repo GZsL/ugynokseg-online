@@ -57,6 +57,7 @@ async function createRoom(){
     return;
   }
 
+  try{ if(typeof setSession==='function') setSession(data.room, data.token); }catch(e){}
   location.href = `lobby.html?room=${encodeURIComponent(data.room)}&token=${encodeURIComponent(data.token)}`;
 }
 
