@@ -14,6 +14,23 @@ const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 app.use(express.static(PUBLIC_DIR));
 app.use("/api/auth", require("./auth.routes"));
 
+const jwt = require("jsonwebtoken");
+
+function requireAuth(req, res, next){
+  const token = req.cookies && req.cookies.token;
+  if(!token){
+    return res.status(401).json({ error: "Login szükséges." });
+  }
+
+  try{
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
+    next();
+  }catch(e){
+    return res.status(401).json({ error: "Érvénytelen token." });
+  }
+}
+
 // Default entry
 app.get('/', (req,res)=>{
   res.redirect('/intro.html');
@@ -175,7 +192,7 @@ app.post('/api/create-room', (req, res) => {
 });
 
 // NEW: create lobby room (token-based)
-app.post('/api/create-room-lobby', (req, res) => {
+app.post('/api/create-room-lobby', requireAuth, (req, res) => {
   try{
     const b = req.body || {};
     const name = String(b.name||'').trim();
