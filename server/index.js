@@ -108,7 +108,7 @@ function joinLobbyRoom({ roomCode, name, characterKey, password=null }){
     connected: false
   });
 
-  return { token };
+  return { code: roomCode, token };
 }
 
 function startGame(roomCode){
@@ -211,11 +211,14 @@ app.post('/api/join-room', (req, res) => {
       return res.status(out.status || 400).json({ error: out.error });
     }
 
-    return res.json({
-      room: out.code,
-      token: out.token,
-      lobbyUrl: `/lobby.html?room=${encodeURIComponent(out.code)}&token=${encodeURIComponent(out.token)}`
-    });
+    const code = out.code || room;
+
+return res.json({
+  room: code,
+  token: out.token,
+  lobbyUrl: `/lobby.html?room=${encodeURIComponent(code)}&token=${encodeURIComponent(out.token)}`
+});
+
   }catch(e){
     console.error(e);
     return res.status(500).json({ error: 'Szerver hiba a csatlakozáskor.' });
