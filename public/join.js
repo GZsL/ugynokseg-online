@@ -58,13 +58,6 @@ async function doJoin(){
     return;
   }
 
-  // Persist session so refresh/back won't lose the token
-  try{
-    if(typeof saveSession === 'function'){
-      saveSession(room, data.token, { name, characterKey: picked, role: 'player' });
-    }
-  }catch(e){}
-
   location.href = `lobby.html?room=${encodeURIComponent(room)}&token=${encodeURIComponent(data.token)}`;
 }
 

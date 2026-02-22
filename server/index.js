@@ -1,25 +1,15 @@
 const path = require('path');
 const http = require('http');
 const express = require('express');
-const cookieParser = require('cookie-parser');
-const cors = require('cors');
 const { Server } = require('socket.io');
 const Engine = require('./engine-core');
-const authRoutes = require('./auth-routes');
-const { requireAuth } = require('./auth-middleware');
 const nodemailer = require('nodemailer');
 
 const app = express();
-app.set('trust proxy', 1);
-app.use(cookieParser());
-app.use(cors({ origin: (process.env.CORS_ORIGINS || '').split(',').map(s=>s.trim()).filter(Boolean).length ? (process.env.CORS_ORIGINS || '').split(',').map(s=>s.trim()) : true, credentials: true }));
 app.use(express.json({ limit: '1mb' }));
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 app.use(express.static(PUBLIC_DIR));
-
-// Auth API
-app.use('/api/auth', authRoutes);
 
 // Default entry
 app.get('/', (req,res)=>{
@@ -140,7 +130,7 @@ function startGame(roomCode){
 }
 
 // LEGACY: Create a new room from Setup page (starts game immediately)
-app.post('/api/create-room', requireAuth,  (req, res) => {
+app.post('/api/create-room', (req, res) => {
   try{
     const configs = (req.body && req.body.configs) ? req.body.configs : null;
     if(!Array.isArray(configs) || configs.length < 2 || configs.length > 4){
@@ -182,7 +172,7 @@ app.post('/api/create-room', requireAuth,  (req, res) => {
 });
 
 // NEW: create lobby room (token-based)
-app.post('/api/create-room-lobby', requireAuth,  (req, res) => {
+app.post('/api/create-room-lobby', (req, res) => {
   try{
     const b = req.body || {};
     const name = String(b.name||'').trim();
@@ -233,7 +223,7 @@ app.post('/api/join-room', (req, res) => {
 });
 
 // NEW: send invite email(s) (host only)
-app.post('/api/send-invite', requireAuth,  async (req, res) => {
+app.post('/api/send-invite', async (req, res) => {
   try{
     const b = req.body || {};
     const room = String(b.room||'').trim().toUpperCase();

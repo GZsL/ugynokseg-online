@@ -140,11 +140,6 @@ function attachSocket(){
     const query = TOKEN ? { room: ROOM, token: TOKEN } : { room: ROOM, player: String(PLAYER_INDEX) };
     socket = io({ query });
 
-    // On (re)connect ask server for the latest snapshot so refresh / network hiccups recover.
-    socket.on('connect', () => {
-      try{ socket.emit('requestSnapshot'); }catch(e){}
-    });
-
     socket.on('state', (s) => {
       const _prev = state;
       state = s;

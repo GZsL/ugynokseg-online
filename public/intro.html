@@ -1,112 +1,81 @@
 <!doctype html>
-<html lang="hu" data-authed="0">
+<html lang="hu">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Ügynökség — Intro</title>
-  <link rel="stylesheet" href="/styles.css" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Ügynökök – Intro</title>
+  <link rel="stylesheet" href="styles.css" />
   <style>
-    /* Auth modal - dark, rounded, matches game vibe */
-    #authModal { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,.55); z-index: 9999; }
-    #authModal.open { display: flex; }
-    .authPanel { width: min(520px, 92vw); border-radius: 18px; border: 1px solid rgba(255,255,255,.14); background: rgba(18,18,18,.92); box-shadow: 0 18px 60px rgba(0,0,0,.45); overflow: hidden; }
-    .authHead { display:flex; align-items:center; justify-content:space-between; padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,.10); }
-    .authHead h3 { margin: 0; font-size: 16px; opacity: .92; }
-    .authClose { border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.06); color: #fff; border-radius: 10px; padding: 6px 10px; cursor: pointer; }
-    .authTabs { display:flex; gap: 10px; padding: 10px 16px; }
-    .authTab { flex: 1; border-radius: 12px; padding: 10px 12px; cursor: pointer; border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.05); color: rgba(255,255,255,.92); }
-    .authTab.active { background: rgba(255,192,0,.18); border-color: rgba(255,192,0,.35); }
-    .authBody { padding: 12px 16px 16px; }
-    .authRow { display:flex; gap: 10px; }
-    .authCol { flex:1; }
-    .authLabel { display:block; font-size: 12px; opacity:.82; margin: 10px 0 6px; }
-    .authInput { width: 100%; box-sizing: border-box; border-radius: 12px; padding: 10px 12px; border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.06); color: #fff; outline: none; }
-    .authInput:focus { border-color: rgba(255,192,0,.55); box-shadow: 0 0 0 3px rgba(255,192,0,.15); }
-    .authActions { display:flex; gap: 10px; align-items:center; margin-top: 12px; }
-    .authBtn { flex:1; border-radius: 12px; padding: 10px 12px; border: 1px solid rgba(255,192,0,.45); background: rgba(255,192,0,.95); color: #1b1b1b; cursor: pointer; font-weight: 700; }
-    .authBtn.secondary { background: rgba(255,255,255,.06); border-color: rgba(255,255,255,.14); color: #fff; font-weight: 600; }
-    .authMsg { margin-top: 10px; padding: 10px 12px; border-radius: 12px; border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.05); font-size: 13px; }
-    .authMsg.error { border-color: rgba(255,80,80,.35); background: rgba(255,80,80,.12); }
-    .authMsg.ok { border-color: rgba(80,255,160,.25); background: rgba(80,255,160,.10); }
-    .authMeta { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-top: 8px; }
-    .authLink { color: rgba(255,255,255,.85); font-size: 12px; text-decoration: underline; cursor: pointer; }
-    #authWhoami { font-size: 12px; opacity:.85; }
+    body{ background:#f8bd01; }
+    .wrap{ min-height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center; gap:18px; padding:24px; box-sizing:border-box;}
+    .videoBox{ width:min(1200px, 92vw); aspect-ratio:16/9; border-radius:20px; overflow:hidden; border:3px solid #2b2b2b; background:#000;}
+    video{ width:100%; height:100%; object-fit:cover; display:block; }
+    .menu{ display:flex; gap:12px; flex-wrap:wrap; justify-content:center; }
+    .pill{ background:#282828; color:#fff; padding:10px 14px; border-radius:999px; font-weight:900; }
   </style>
 </head>
 <body>
-
-  <!-- Your existing intro content should be here. Keep your original intro markup. -->
-  <!-- Minimal: we assume there is a Host button with id="btnHost". If not, we'll still gate by data-action="host". -->
-
-  <div id="authModal" aria-hidden="true">
-    <div class="authPanel" role="dialog" aria-modal="true">
-      <div class="authHead">
-        <h3>Fiók</h3>
-        <button class="authClose" id="authCloseBtn">Bezárás</button>
-      </div>
-
-      <div class="authTabs">
-        <button class="authTab active" id="authTabLogin" type="button">Belépés</button>
-        <button class="authTab" id="authTabRegister" type="button">Regisztráció</button>
-      </div>
-
-      <div class="authBody">
-        <div id="authWhoami">Vendég mód</div>
-
-        <div id="authBoxLogin">
-          <label class="authLabel">E-mail</label>
-          <input class="authInput" id="authLoginEmail" type="email" autocomplete="email" />
-
-          <label class="authLabel">Jelszó</label>
-          <input class="authInput" id="authLoginPassword" type="password" autocomplete="current-password" />
-
-          <div class="authMeta">
-            <a href="#" class="authLink" id="authForgotLink">Elfelejtett jelszó</a>
-          </div>
-
-          <div class="authActions">
-            <button class="authBtn" id="authLoginBtn" type="button">Belépés</button>
-          </div>
-        </div>
-
-        <div id="authBoxRegister" style="display:none;">
-          <div class="authRow">
-            <div class="authCol">
-              <label class="authLabel">Név</label>
-              <input class="authInput" id="authRegName" type="text" autocomplete="nickname" />
-            </div>
-            <div class="authCol">
-              <label class="authLabel">E-mail</label>
-              <input class="authInput" id="authRegEmail" type="email" autocomplete="email" />
-            </div>
-          </div>
-
-          <label class="authLabel">Jelszó (min. 6 karakter)</label>
-          <input class="authInput" id="authRegPassword" type="password" autocomplete="new-password" />
-
-          <div class="authActions">
-            <button class="authBtn" id="authRegisterBtn" type="button">Regisztráció</button>
-          </div>
-
-          <div class="authMeta">
-            <span style="font-size:12px;opacity:.75;">Emailben küldünk megerősítő linket.</span>
-          </div>
-        </div>
-
-        <div id="authBoxForgot" style="display:none;">
-          <label class="authLabel">E-mail</label>
-          <input class="authInput" id="authForgotEmail" type="email" autocomplete="email" />
-          <div class="authActions">
-            <button class="authBtn" id="authForgotBtn" type="button">Visszaállító link küldése</button>
-            <button class="authBtn secondary" type="button" onclick="document.getElementById('authTabLogin').click()">Vissza</button>
-          </div>
-        </div>
-
-        <div class="authMsg" id="authMsg"></div>
-      </div>
+  <div class="wrap">
+    <div class="pill">ÜGYNÖKÖK ÉS TOLVAJOK – ONLINE MVP</div>
+    <div class="videoBox">
+      <video id="introVideo" autoplay muted playsinline></video>
+    </div>
+    <div class="menu">
+      <a class="btn btn-theme" href="host.html">Új szoba (Host)</a>
+      <a class="btn btn-outline" href="join.html">Csatlakozás (Join)</a>
+      <a class="btn btn-outline" href="setup.html" title="Régi technikai setup (player=0..3)">Setup (legacy)</a>
     </div>
   </div>
 
-  <script src="/intro-auth.js"></script>
+  <script>
+    // Több intro videó esetén random választ.
+    // Ha csak egy van, működik ugyanúgy.
+    const SOURCES = [
+      "assets/intro_animacio.mp4",
+      "assets/intro_animacio_2.mp4",
+      "assets/intro_animacio_3.mp4"
+    ];
+    const v = document.getElementById('introVid');
+    const pick = SOURCES[Math.floor(Math.random()*SOURCES.length)];
+    v.src = pick;
+    v.addEventListener('loadedmetadata', ()=>{ v.play().catch(()=>{}); });
+  </script>
+<script>
+const video = document.getElementById("introVideo");
+
+const videos = [
+  "assets/videos/intro1.mp4",
+  "assets/videos/intro2.mp4",
+  "assets/videos/intro3.mp4"
+];
+
+let lastIndex = -1;
+
+function getRandomIndex() {
+  if (videos.length <= 1) return 0;
+
+  let index;
+  do {
+    index = Math.floor(Math.random() * videos.length);
+  } while (index === lastIndex);
+
+  lastIndex = index;
+  return index;
+}
+
+function playRandomVideo() {
+  const index = getRandomIndex();
+  video.src = videos[index];
+  video.play().catch(() => {});
+}
+
+// Első betöltéskor
+playRandomVideo();
+
+// Ha vége, jöjjön másik random
+video.addEventListener("ended", () => {
+  playRandomVideo();
+});
+</script>
 </body>
 </html>
