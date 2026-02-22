@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="hu">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Ügynökség — Ranglista</title>
+  <link rel="stylesheet" href="/style.css" />
+  <style>
+    /* Minimal: illeszkedjen a meglévő layoutba, de ne írja felül a projekt stílusát durván */
+    .wrap { max-width: 980px; margin: 0 auto; padding: 24px 16px; }
+    .card { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 14px; padding: 16px; }
+    .row { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { padding: 10px 8px; border-bottom: 1px solid rgba(255,255,255,0.10); text-align: left; }
+    th { opacity: 0.9; font-weight: 600; }
+    .muted { opacity: 0.8; font-size: 0.95em; }
+    .pill { padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.16); }
+    .right { text-align:right; }
+    .error { margin-top: 10px; padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(255,80,80,0.35); background: rgba(255,80,80,0.12); display:none; }
+    .loading { margin-top: 10px; opacity: .85; }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <div class="row">
+      <h1>Ranglista</h1>
+      <div class="row">
+        <span class="pill muted" id="statusPill">Betöltés…</span>
+        <a class="pill" href="/intro.html">Vissza</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row">
+        <div class="muted">Csak a regisztrált játékosok eredményei kerülnek fel (vendégek nem).</div>
+        <div class="row">
+          <label class="muted">Limit:
+            <select id="limitSel">
+              <option value="20">20</option>
+              <option value="50" selected>50</option>
+              <option value="100">100</option>
+            </select>
+          </label>
+          <button id="reloadBtn" class="pill">Frissítés</button>
+        </div>
+      </div>
+
+      <div class="loading" id="loading">Betöltés…</div>
+      <div class="error" id="errorBox"></div>
+
+      <table id="tbl" style="display:none;">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Játékos</th>
+            <th class="right">Győzelem</th>
+            <th class="right">Vereség</th>
+            <th class="right">Döntetlen</th>
+            <th class="right">Meccs</th>
+            <th class="right">Pont</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+
+      <div class="muted" style="margin-top:10px;">
+        Tipp: ha még üres, játssz le pár meccset (vagy hívjuk meg a /api/match/finish endpointot a game endből).
+      </div>
+    </div>
+  </div>
+
+  <script src="/leaderboard.js"></script>
+</body>
+</html>
