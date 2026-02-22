@@ -34,6 +34,17 @@ app.get("/db-test", async (req, res) => {
     res.status(500).json({ error: "DB insert failed" });
   }
 });
+app.get("/db-list", async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT * FROM test_table ORDER BY id DESC"
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "DB select failed" });
+  }
+});
 
 app.get('/', (req,res)=>{
   res.redirect('/intro.html');
