@@ -1,0 +1,4 @@
+/* --- AUTH INPUT PATCH (dark/rounded) --- */
+.label{display:block;margin:10px 0 6px;font-size:12px;opacity:.82;font-weight:700}
+.input{width:100%;box-sizing:border-box;padding:10px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#fff;outline:none}
+.input:focus{border-color:rgba(255,192,0,.55);box-shadow:0 0 0 3px rgba(255,192,0,.15)}
