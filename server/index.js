@@ -22,6 +22,19 @@ const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 app.use(express.static(PUBLIC_DIR));
 
 // Default entry
+app.get("/db-test", async (req, res) => {
+  try {
+    const result = await pool.query(
+      "INSERT INTO test_table (name) VALUES ($1) RETURNING *",
+      ["render_test"]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "DB insert failed" });
+  }
+});
+
 app.get('/', (req,res)=>{
   res.redirect('/intro.html');
 });
