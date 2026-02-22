@@ -5,6 +5,7 @@ const { Server } = require('socket.io');
 const Engine = require('./engine-core');
 const nodemailer = require('nodemailer');
 const pool = require("./db");
+const redis = require("./redis");
 
 (async () => {
   try {
