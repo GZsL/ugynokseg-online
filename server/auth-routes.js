@@ -1,253 +1,301 @@
-'use strict';
-
-const express = require('express');
-const jwt = require('jsonwebtoken');
-const bcrypt = require('bcryptjs');
-const crypto = require('crypto');
-
-const prisma = require('./db');
-const { sendMail } = require('./mailer');
-
+const express = require("express");
 const router = express.Router();
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
 
-const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
-const APP_URL = process.env.APP_URL || 'http://localhost:3000';
+const db = require("./db");
+const prisma = db?.prisma || db;
 
-function signAuthToken(userId) {
-  return jwt.sign({ sub: userId }, JWT_SECRET, { expiresIn: '30d' });
+const { sendMail } = require("./mailer");
+
+const APP_URL = process.env.APP_URL || "";
+const JWT_SECRET = process.env.JWT_SECRET || "";
+
+// --- helpers ---
+function pickString(obj, keys) {
+  for (const k of keys) {
+    const v = obj?.[k];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return "";
 }
 
-function setAuthCookie(res, token) {
-  const isProd = process.env.NODE_ENV === 'production';
-  res.cookie('auth', token, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: isProd,
-    maxAge: 30 * 24 * 60 * 60 * 1000
-  });
+function safeEmail(raw) {
+  const email = String(raw || "").trim().toLowerCase();
+  if (!email) return { ok: false, email: "", error: "Hiányzó e-mail cím." };
+  if (!email.includes("@") || email.length < 5) return { ok: false, email, error: "Hibás e-mail cím." };
+  return { ok: true, email };
 }
 
-function clearAuthCookie(res) {
-  res.clearCookie('auth');
+function requireEnv(res) {
+  if (!JWT_SECRET) {
+    res.status(500).json({ error: "Server misconfigured: JWT_SECRET missing." });
+    return false;
+  }
+  return true;
 }
 
-function requireBodyFields(fields) {
-  return (req, res, next) => {
-    for (const f of fields) {
-      if (req.body?.[f] == null || String(req.body[f]).trim() === '') {
-        return res.status(400).json({ error: `Missing field: ${f}` });
-      }
-    }
-    next();
-  };
+function signAuthToken(user) {
+  return jwt.sign({ sub: user.id, email: user.email }, JWT_SECRET, { expiresIn: "30d" });
 }
 
-router.post('/register', requireBodyFields(['email', 'password']), async (req, res) => {
+// Cookie settings: works on Render HTTPS
+const COOKIE_NAME = "auth";
+const cookieOpts = {
+  httpOnly: true,
+  sameSite: "lax",
+  secure: true,
+  path: "/",
+  maxAge: 1000 * 60 * 60 * 24 * 30
+};
+
+// --- routes ---
+
+/**
+ * POST /api/auth/register
+ * body: { name, email, password } (also accepts username/emailAddress/pass)
+ */
+router.post("/register", async (req, res) => {
   try {
-    const email = String(req.body.email).trim().toLowerCase();
-    const password = String(req.body.password);
-    const name = req.body.name ? String(req.body.name).trim() : null;
+    if (!requireEnv(res)) return;
 
-    const existing = await prisma.user.findUnique({ where: { email } });
-    if (existing) return res.status(409).json({ error: 'Email already registered' });
+    const name = pickString(req.body, ["name", "username", "displayName"]) || "Játékos";
+    const emailRaw = pickString(req.body, ["email", "emailAddress", "mail"]);
+    const password = pickString(req.body, ["password", "pass", "pwd"]);
 
-    const passwordHash = await bcrypt.hash(password, 12);
+    const e = safeEmail(emailRaw);
+    if (!e.ok) return res.status(400).json({ error: e.error });
 
-    const verifyToken = crypto.randomBytes(32).toString('hex');
-    const verifyTokenHash = await bcrypt.hash(verifyToken, 10);
+    if (!password || password.length < 6) {
+      return res.status(400).json({ error: "A jelszónak legalább 6 karakternek kell lennie." });
+    }
+
+    // If your prisma schema uses different field names, adjust here.
+    const existing = await prisma.user.findUnique({ where: { email: e.email } }).catch(() => null);
+    if (existing) return res.status(409).json({ error: "Ezzel az e-mail címmel már van fiók." });
+
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    const verifyToken = jwt.sign({ email: e.email, purpose: "verify" }, JWT_SECRET, { expiresIn: "24h" });
 
     const user = await prisma.user.create({
       data: {
-        email,
+        email: e.email,
         name,
         passwordHash,
         emailVerified: false,
-        verifyTokenHash,
-        verifyTokenExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
+        verifyToken
       }
     });
 
-    const verifyUrl = `${APP_URL}/verify.html?token=${encodeURIComponent(verifyToken)}&email=${encodeURIComponent(email)}`;
-
-    await sendMail({
-      to: email,
-      subject: 'Erősítsd meg a regisztrációdat',
-      html: `
-        <p>Szia${name ? ` ${name}` : ''}!</p>
-        <p>Kérlek erősítsd meg a regisztrációdat az alábbi linkre kattintva:</p>
-        <p><a href="${verifyUrl}">${verifyUrl}</a></p>
-        <p>A link 24 óráig érvényes.</p>
-      `
-    });
-
-    res.json({ ok: true, userId: user.id });
-  } catch (e) {
-    console.error('register error', e);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-router.post('/verify', requireBodyFields(['email', 'token']), async (req, res) => {
-  try {
-    const email = String(req.body.email).trim().toLowerCase();
-    const token = String(req.body.token).trim();
-
-    const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) return res.status(404).json({ error: 'User not found' });
-
-    if (user.emailVerified) return res.json({ ok: true, alreadyVerified: true });
-
-    if (!user.verifyTokenHash || !user.verifyTokenExpiresAt) {
-      return res.status(400).json({ error: 'No verification token. Please resend.' });
-    }
-    if (user.verifyTokenExpiresAt.getTime() < Date.now()) {
-      return res.status(400).json({ error: 'Verification token expired. Please resend.' });
+    // Try email, but don't fail registration if SMTP is misconfigured.
+    const verifyUrl = `${APP_URL.replace(/\/$/, "")}/api/auth/verify?token=${encodeURIComponent(verifyToken)}`;
+    let mailOk = false;
+    try {
+      await sendMail({
+        to: e.email,
+        subject: "Ügynökség — Email megerősítés",
+        text: `Szia ${name}!\n\nEmail megerősítéshez kattints:\n${verifyUrl}\n\nHa nem te voltál, hagyd figyelmen kívül.`,
+        html: `<p>Szia <b>${escapeHtml(name)}</b>!</p>
+               <p>Email megerősítéshez kattints:</p>
+               <p><a href="${verifyUrl}">${verifyUrl}</a></p>
+               <p>Ha nem te voltál, hagyd figyelmen kívül.</p>`
+      });
+      mailOk = true;
+    } catch (err) {
+      console.error("verify email send failed:", err?.message || err);
     }
 
-    const matches = await bcrypt.compare(token, user.verifyTokenHash);
-    if (!matches) return res.status(400).json({ error: 'Invalid token' });
+    // Optional: auto-login after register (even before verify). You can change this policy.
+    const token = signAuthToken(user);
+    res.cookie(COOKIE_NAME, token, cookieOpts);
 
-    await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        emailVerified: true,
-        verifyTokenHash: null,
-        verifyTokenExpiresAt: null
-      }
-    });
-
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('verify error', e);
-    res.status(500).json({ error: 'Server error' });
+    return res.json({ ok: true, mailOk, needsVerify: true });
+  } catch (err) {
+    console.error("register error:", err);
+    return res.status(500).json({ error: "Server error (register)." });
   }
 });
 
-router.post('/login', requireBodyFields(['email', 'password']), async (req, res) => {
+/**
+ * GET /api/auth/verify?token=...
+ */
+router.get("/verify", async (req, res) => {
   try {
-    const email = String(req.body.email).trim().toLowerCase();
-    const password = String(req.body.password);
+    if (!requireEnv(res)) return;
 
-    const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) return res.status(401).json({ error: 'Invalid credentials' });
-
-    const ok = await bcrypt.compare(password, user.passwordHash);
-    if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
-
-    if (!user.emailVerified) return res.status(403).json({ error: 'Email not verified' });
-
-    const token = signAuthToken(user.id);
-    setAuthCookie(res, token);
-
-    res.json({ ok: true, user: { id: user.id, email: user.email, name: user.name } });
-  } catch (e) {
-    console.error('login error', e);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-router.post('/logout', async (_req, res) => {
-  clearAuthCookie(res);
-  res.json({ ok: true });
-});
-
-router.get('/me', async (req, res) => {
-  try {
-    const token = req.cookies?.auth;
-    if (!token) return res.status(401).json({ error: 'Not authenticated' });
+    const token = typeof req.query?.token === "string" ? req.query.token : "";
+    if (!token) return res.status(400).send("Missing token.");
 
     let payload;
     try {
       payload = jwt.verify(token, JWT_SECRET);
     } catch {
-      return res.status(401).json({ error: 'Not authenticated' });
+      return res.status(400).send("Invalid or expired token.");
     }
-
-    const userId = payload?.sub;
-    const user = await prisma.user.findUnique({ where: { id: userId } });
-    if (!user) return res.status(401).json({ error: 'Not authenticated' });
-
-    res.json({ ok: true, user: { id: user.id, email: user.email, name: user.name } });
-  } catch (e) {
-    console.error('me error', e);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-router.post('/forgot', requireBodyFields(['email']), async (req, res) => {
-  try {
-    const email = String(req.body.email).trim().toLowerCase();
-
-    const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) return res.json({ ok: true });
-
-    const resetToken = crypto.randomBytes(32).toString('hex');
-    const resetTokenHash = await bcrypt.hash(resetToken, 10);
+    if (!payload?.email || payload?.purpose !== "verify") return res.status(400).send("Invalid token.");
 
     await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        resetTokenHash,
-        resetTokenExpiresAt: new Date(Date.now() + 60 * 60 * 1000)
-      }
+      where: { email: String(payload.email).toLowerCase() },
+      data: { emailVerified: true, verifyToken: null }
     });
 
-    const resetUrl = `${APP_URL}/reset.html?token=${encodeURIComponent(resetToken)}&email=${encodeURIComponent(email)}`;
-
-    await sendMail({
-      to: email,
-      subject: 'Jelszó visszaállítás',
-      html: `
-        <p>Jelszó visszaállítást kértél.</p>
-        <p>Új jelszó beállítása:</p>
-        <p><a href="${resetUrl}">${resetUrl}</a></p>
-        <p>A link 1 óráig érvényes.</p>
-      `
-    });
-
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('forgot error', e);
-    res.status(500).json({ error: 'Server error' });
+    // Redirect back to app
+    const back = `${APP_URL.replace(/\/$/, "")}/intro.html?verified=1`;
+    return res.redirect(back);
+  } catch (err) {
+    console.error("verify error:", err);
+    return res.status(500).send("Server error.");
   }
 });
 
-router.post('/reset', requireBodyFields(['email', 'token', 'password']), async (req, res) => {
+/**
+ * POST /api/auth/login
+ * body: { email, password }
+ */
+router.post("/login", async (req, res) => {
   try {
-    const email = String(req.body.email).trim().toLowerCase();
-    const token = String(req.body.token).trim();
-    const password = String(req.body.password);
+    if (!requireEnv(res)) return;
 
-    const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) return res.status(400).json({ error: 'Invalid token' });
+    const emailRaw = pickString(req.body, ["email", "emailAddress", "mail"]);
+    const password = pickString(req.body, ["password", "pass", "pwd"]);
 
-    if (!user.resetTokenHash || !user.resetTokenExpiresAt) {
-      return res.status(400).json({ error: 'Invalid token' });
-    }
-    if (user.resetTokenExpiresAt.getTime() < Date.now()) {
-      return res.status(400).json({ error: 'Reset token expired' });
-    }
+    const e = safeEmail(emailRaw);
+    if (!e.ok) return res.status(400).json({ error: e.error });
 
-    const matches = await bcrypt.compare(token, user.resetTokenHash);
-    if (!matches) return res.status(400).json({ error: 'Invalid token' });
+    const user = await prisma.user.findUnique({ where: { email: e.email } });
+    if (!user) return res.status(401).json({ error: "Hibás e-mail vagy jelszó." });
 
-    const passwordHash = await bcrypt.hash(password, 12);
+    const ok = await bcrypt.compare(password, user.passwordHash || "");
+    if (!ok) return res.status(401).json({ error: "Hibás e-mail vagy jelszó." });
 
-    await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        passwordHash,
-        resetTokenHash: null,
-        resetTokenExpiresAt: null
-      }
-    });
-
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('reset error', e);
-    res.status(500).json({ error: 'Server error' });
+    const token = signAuthToken(user);
+    res.cookie(COOKIE_NAME, token, cookieOpts);
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("login error:", err);
+    return res.status(500).json({ error: "Server error (login)." });
   }
 });
 
-// IMPORTANT: export router directly
+/**
+ * POST /api/auth/logout
+ */
+router.post("/logout", async (_req, res) => {
+  res.clearCookie(COOKIE_NAME, { path: "/" });
+  res.json({ ok: true });
+});
+
+/**
+ * GET /api/auth/me
+ */
+router.get("/me", async (req, res) => {
+  try {
+    if (!requireEnv(res)) return;
+
+    const token = req.cookies?.[COOKIE_NAME];
+    if (!token) return res.status(401).json({ ok: false });
+
+    let payload;
+    try {
+      payload = jwt.verify(token, JWT_SECRET);
+    } catch {
+      return res.status(401).json({ ok: false });
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: payload.sub } });
+    if (!user) return res.status(401).json({ ok: false });
+
+    return res.json({
+      ok: true,
+      user: { id: user.id, email: user.email, name: user.name, emailVerified: !!user.emailVerified }
+    });
+  } catch (err) {
+    console.error("me error:", err);
+    return res.status(500).json({ ok: false });
+  }
+});
+
+/**
+ * POST /api/auth/forgot
+ * body: { email }
+ */
+router.post("/forgot", async (req, res) => {
+  try {
+    if (!requireEnv(res)) return;
+
+    const emailRaw = pickString(req.body, ["email", "emailAddress", "mail"]);
+    const e = safeEmail(emailRaw);
+    if (!e.ok) return res.status(200).json({ ok: true }); // don't leak existence
+
+    const user = await prisma.user.findUnique({ where: { email: e.email } }).catch(() => null);
+    if (!user) return res.status(200).json({ ok: true });
+
+    const resetToken = jwt.sign({ sub: user.id, purpose: "reset" }, JWT_SECRET, { expiresIn: "1h" });
+    await prisma.user.update({ where: { id: user.id }, data: { resetToken } });
+
+    const resetUrl = `${APP_URL.replace(/\/$/, "")}/reset.html?token=${encodeURIComponent(resetToken)}`;
+
+    try {
+      await sendMail({
+        to: e.email,
+        subject: "Ügynökség — Jelszó visszaállítás",
+        text: `Jelszó visszaállítás:\n${resetUrl}\n\nHa nem te kérted, hagyd figyelmen kívül.`,
+        html: `<p>Jelszó visszaállítás:</p><p><a href="${resetUrl}">${resetUrl}</a></p>`
+      });
+    } catch (err) {
+      console.error("reset email send failed:", err?.message || err);
+    }
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("forgot error:", err);
+    return res.status(500).json({ ok: false });
+  }
+});
+
+/**
+ * POST /api/auth/reset
+ * body: { token, password }
+ */
+router.post("/reset", async (req, res) => {
+  try {
+    if (!requireEnv(res)) return;
+
+    const token = pickString(req.body, ["token"]);
+    const password = pickString(req.body, ["password", "pass", "pwd"]);
+
+    if (!token) return res.status(400).json({ error: "Missing token." });
+    if (!password || password.length < 6) return res.status(400).json({ error: "A jelszónak legalább 6 karakternek kell lennie." });
+
+    let payload;
+    try {
+      payload = jwt.verify(token, JWT_SECRET);
+    } catch {
+      return res.status(400).json({ error: "Invalid or expired token." });
+    }
+    if (payload?.purpose !== "reset" || !payload?.sub) return res.status(400).json({ error: "Invalid token." });
+
+    const user = await prisma.user.findUnique({ where: { id: payload.sub } });
+    if (!user || user.resetToken !== token) return res.status(400).json({ error: "Invalid token." });
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    await prisma.user.update({ where: { id: user.id }, data: { passwordHash, resetToken: null } });
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("reset error:", err);
+    return res.status(500).json({ ok: false });
+  }
+});
+
+function escapeHtml(s) {
+  return String(s)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 module.exports = router;
