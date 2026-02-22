@@ -4,6 +4,16 @@ const express = require('express');
 const { Server } = require('socket.io');
 const Engine = require('./engine-core');
 const nodemailer = require('nodemailer');
+const pool = require("./db");
+
+(async () => {
+  try {
+    await pool.query("SELECT 1");
+    console.log("DB OK");
+  } catch (err) {
+    console.error("DB ERROR:", err);
+  }
+})();
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
