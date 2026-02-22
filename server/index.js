@@ -6,6 +6,7 @@ const Engine = require('./engine-core');
 const nodemailer = require('nodemailer');
 const pool = require("./db");
 const redis = require("./redis");
+const roomStore = require("./room-store");
 
 (async () => {
   // DB check...
