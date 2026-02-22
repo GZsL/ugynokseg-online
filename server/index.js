@@ -8,11 +8,24 @@ const pool = require("./db");
 const redis = require("./redis");
 
 (async () => {
+  // DB check...
   try {
     await pool.query("SELECT 1");
     console.log("DB OK");
   } catch (err) {
     console.error("DB ERROR:", err);
+  }
+
+  // Redis check...
+  try {
+    if (redis) {
+      const pong = await redis.ping();
+      console.log("REDIS PING:", pong);
+    } else {
+      console.log("REDIS: disabled");
+    }
+  } catch (e) {
+    console.error("REDIS PING ERROR:", e);
   }
 })();
 
