@@ -101,9 +101,10 @@ function uid(prefix='t'){
   return prefix + '_' + Math.random().toString(16).slice(2) + '_' + Date.now().toString(16);
 }
 
-function createLobbyRoom({ hostName, hostCharacterKey, maxPlayers=4, isPublic=false, password=null }){
+async function createLobbyRoom({ hostName, hostCharacterKey, maxPlayers=4, isPublic=false, password=null }){
   let code;
-  do{ code = makeRoomCode(4); }while(rooms.has(code));
+  do { code = makeRoomCode(4); }
+  while (rooms.has(code) || (await roomStore.hasRoom(code)));
 
   const hostToken = uid('tok');
   const room = {
@@ -112,7 +113,7 @@ function createLobbyRoom({ hostName, hostCharacterKey, maxPlayers=4, isPublic=fa
     options: {
       maxPlayers: Math.min(4, Math.max(2, parseInt(String(maxPlayers||4),10) || 4)),
       isPublic: !!isPublic,
-      password: password ? String(password) : null // MVP: plain; later hash
+      password: password ? String(password) : null
     },
     players: [
       {
@@ -128,11 +129,16 @@ function createLobbyRoom({ hostName, hostCharacterKey, maxPlayers=4, isPublic=fa
     state: null
   };
 
+  // ✅ továbbra is működjön a régi rendszer
   rooms.set(code, room);
+
+  // ✅ és közben mentsük Redisbe is
+  await roomStore.setRoom(code, room);
+
   return { code, token: hostToken };
 }
 
-function joinLobbyRoom({ roomCode, name, characterKey, password=null }){
+async function joinLobbyRoom({ roomCode, name, characterKey, password=null }){
   const r = rooms.get(roomCode);
   if(!r) return { error: 'Szoba nem található.' };
   if(r.phase !== 'LOBBY') return { error: 'Ez a szoba már elindult.' };
@@ -157,15 +163,20 @@ function joinLobbyRoom({ roomCode, name, characterKey, password=null }){
     connected: false
   });
 
+  // ✅ Redis update is
+  await roomStore.setRoom(roomCode, r);
+
   return { code: roomCode, token };
 }
 
-function startGame(roomCode){
+async function startGame(roomCode){
   const r = rooms.get(roomCode);
   if(!r) return { error: 'Szoba nem található.' };
   if(r.phase !== 'LOBBY') return { error: 'A játék már fut.' };
+
   const players = r.players || [];
   if(players.length < 2) return { error: 'Minimum 2 játékos kell.' };
+
   const readyCount = players.filter(p=>p && p.ready).length;
   if(readyCount < 2) return { error: 'Minimum 2 játékos legyen READY.' };
 
@@ -175,11 +186,15 @@ function startGame(roomCode){
 
   r.state = state;
   r.phase = 'IN_GAME';
+
+  // ✅ Redis update is
+  await roomStore.setRoom(roomCode, r);
+
   return { ok:true };
 }
 
 // LEGACY: Create a new room from Setup page (starts game immediately)
-app.post('/api/create-room', (req, res) => {
+app.post('/api/create-room', async (req, res) => {
   try{
     const configs = (req.body && req.body.configs) ? req.body.configs : null;
     if(!Array.isArray(configs) || configs.length < 2 || configs.length > 4){
@@ -221,7 +236,7 @@ app.post('/api/create-room', (req, res) => {
 });
 
 // NEW: create lobby room (token-based)
-app.post('/api/create-room-lobby', (req, res) => {
+app.post('/api/create-room-lobby', async (req, res) => {
   try{
     const b = req.body || {};
     const name = String(b.name||'').trim();
@@ -233,7 +248,8 @@ app.post('/api/create-room-lobby', (req, res) => {
     if(!name) return res.status(400).json({ error: 'Adj meg nevet.' });
     if(!characterKey) return res.status(400).json({ error: 'Válassz karaktert.' });
 
-    const created = createLobbyRoom({ hostName:name, hostCharacterKey:characterKey, maxPlayers, isPublic, password });
+    const created = await createLobbyRoom({ hostName:name, hostCharacterKey:characterKey, maxPlayers, isPublic, password });
+
     const inviteLink = `/join.html?room=${created.code}`;
     return res.json({ room: created.code, token: created.token, inviteLink });
   }catch(e){
@@ -243,7 +259,7 @@ app.post('/api/create-room-lobby', (req, res) => {
 });
 
 // NEW: join lobby room
-app.post('/api/join-room', (req, res) => {
+app.post('/api/join-room', async (req, res) => {
   try{
     const b = req.body || {};
     const room = String(b.room||'').trim().toUpperCase();
@@ -255,7 +271,7 @@ app.post('/api/join-room', (req, res) => {
     if(!name) return res.status(400).json({ error: 'Adj meg nevet.' });
     if(!characterKey) return res.status(400).json({ error: 'Válassz karaktert.' });
 
-    const out = joinLobbyRoom({ roomCode: room, name, characterKey, password });
+    const out = await joinLobbyRoom({ roomCode: room, name, characterKey, password });
     if(out && out.error){
       return res.status(out.status || 400).json({ error: out.error });
     }
