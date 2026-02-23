@@ -79,9 +79,21 @@ async function listRooms(limit = 200) {
   return codes;
 }
 
+async function hasRoom(code) {
+  if (!code) return false;
+
+  if (!redis) {
+    return mem.has(code);
+  }
+
+  const n = await redis.exists(key(code));
+  return n === 1;
+}
+
 module.exports = {
   getRoom,
   setRoom,
   deleteRoom,
   listRooms,
+  hasRoom,
 };
