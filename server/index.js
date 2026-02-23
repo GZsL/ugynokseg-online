@@ -7,7 +7,6 @@
 const path = require('path');
 const http = require('http');
 const express = require('express');
-const cookieParser = require('cookie-parser');
 const nodemailer = require('nodemailer');
 const { Server } = require('socket.io');
 
@@ -41,8 +40,6 @@ const roomStore = require('./room-store'); // uses Redis if REDIS_URL is set
 // -------------------- Express --------------------
 const app = express();
 app.use(express.json({ limit: '1mb' }));
-app.use(cookieParser());
-
 // Static
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 app.use(express.static(PUBLIC_DIR));
