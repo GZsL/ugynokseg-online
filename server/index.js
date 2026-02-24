@@ -510,7 +510,7 @@ io.on('connection', (socket) => {
       
 
       if (norm === 'TOGGLE_READY') {
-        const room = await roomStore.getRoom(code);
+        const room = await roomStore.getRoom(roomCode);
         if (!room) return;
         const me = room.players && room.players[playerIndex];
         if (!me) return;
@@ -518,14 +518,14 @@ io.on('connection', (socket) => {
         const nextReady = (payload.ready === undefined) ? !me.ready : !!payload.ready;
         me.ready = nextReady;
 
-        await roomStore.setRoom(code, room);
-        broadcastLobby(code);
+        await roomStore.setRoom(roomCode, room);
+        await broadcastLobby(roomCode);
         return;
       }
 
       if (norm === 'START') {
         // only host may start
-        const room = await roomStore.getRoom(code);
+        const room = await roomStore.getRoom(roomCode);
         if (!room) return;
         const me = room.players && room.players[playerIndex];
         if (!me || !me.isHost) return;
@@ -533,9 +533,9 @@ io.on('connection', (socket) => {
         // reuse same logic as 'startGame' handler
         if (room.phase !== 'LOBBY') return;
         const players = room.players || [];
-        if (players.length < 2) return socket.emit('serverMsg', { text: 'Minimum 2 játékos kell.' });
+        if (players.length < 2) return socket.emit('serverMsg', 'Minimum 2 játékos kell.');
         const readyCount = players.filter(p => p && p.ready).length;
-        if (readyCount < 2) return socket.emit('serverMsg', { text: 'Minimum 2 játékos legyen READY.' });
+        if (readyCount < 2) return socket.emit('serverMsg', 'Minimum 2 játékos legyen READY.');
 
         const configs = players.map(p => ({ name: p.name, characterKey: p.characterKey }));
         let state = Engine.createGame(configs);
@@ -544,8 +544,9 @@ io.on('connection', (socket) => {
         room.state = state;
         room.phase = 'IN_GAME';
 
-        await roomStore.setRoom(code, room);
-        broadcastLobby(code);
+        await roomStore.setRoom(roomCode, room);
+        await broadcastLobby(roomCode);
+        await broadcastStatePerPlayer(roomCode);
         return;
       }
 
@@ -555,12 +556,17 @@ io.on('connection', (socket) => {
       }
     } catch (e) {
       console.error(e);
-      socket.emit('serverMsg', { text: 'Szerver hiba.' });
+      socket.emit('serverMsg', 'Szerver hiba.');
     }
   });
 
 
     socket.on('action', async (type, payload) => {
+      // Client compatibility: some builds send a single object: { type, payload }
+      if (type && typeof type === 'object' && type.type) {
+        payload = type.payload;
+        type = type.type;
+      }
       const rr = await roomStore.getRoom(roomCode);
       if (!rr || !rr.state) return;
 
