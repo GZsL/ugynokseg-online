@@ -505,9 +505,11 @@ io.on('connection', (socket) => {
   // Supported: { type: 'TOGGLE_READY' | 'START' | 'LEAVE', ready?: boolean }
   socket.on('lobbyAction', async (payload = {}) => {
     try {
-      const type = String(payload.type || '').toUpperCase();
+      const type = String((payload.type || payload.action) || '').toUpperCase();
+      const norm = (type === 'START_GAME') ? 'START' : type;
+      
 
-      if (type === 'TOGGLE_READY') {
+      if (norm === 'TOGGLE_READY') {
         const room = await roomStore.getRoom(code);
         if (!room) return;
         const me = room.players && room.players[playerIndex];
@@ -521,7 +523,7 @@ io.on('connection', (socket) => {
         return;
       }
 
-      if (type === 'START') {
+      if (norm === 'START') {
         // only host may start
         const room = await roomStore.getRoom(code);
         if (!room) return;
@@ -547,7 +549,7 @@ io.on('connection', (socket) => {
         return;
       }
 
-      if (type === 'LEAVE') {
+      if (norm === 'LEAVE') {
         socket.disconnect(true);
         return;
       }
