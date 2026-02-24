@@ -510,7 +510,7 @@ io.on('connection', (socket) => {
       
 
       if (norm === 'TOGGLE_READY') {
-        const room = await roomStore.getRoom(roomCode);
+        const room = await roomStore.getRoom(code);
         if (!room) return;
         const me = room.players && room.players[playerIndex];
         if (!me) return;
@@ -518,14 +518,14 @@ io.on('connection', (socket) => {
         const nextReady = (payload.ready === undefined) ? !me.ready : !!payload.ready;
         me.ready = nextReady;
 
-        await roomStore.setRoom(roomCode, room);
-        await broadcastLobby(roomCode);
+        await roomStore.setRoom(code, room);
+        broadcastLobby(code);
         return;
       }
 
       if (norm === 'START') {
         // only host may start
-        const room = await roomStore.getRoom(roomCode);
+        const room = await roomStore.getRoom(code);
         if (!room) return;
         const me = room.players && room.players[playerIndex];
         if (!me || !me.isHost) return;
@@ -533,9 +533,9 @@ io.on('connection', (socket) => {
         // reuse same logic as 'startGame' handler
         if (room.phase !== 'LOBBY') return;
         const players = room.players || [];
-        if (players.length < 2) return socket.emit('serverMsg', 'Minimum 2 játékos kell.');
+        if (players.length < 2) return socket.emit('serverMsg', { text: 'Minimum 2 játékos kell.' });
         const readyCount = players.filter(p => p && p.ready).length;
-        if (readyCount < 2) return socket.emit('serverMsg', 'Minimum 2 játékos legyen READY.');
+        if (readyCount < 2) return socket.emit('serverMsg', { text: 'Minimum 2 játékos legyen READY.' });
 
         const configs = players.map(p => ({ name: p.name, characterKey: p.characterKey }));
         let state = Engine.createGame(configs);
@@ -544,9 +544,8 @@ io.on('connection', (socket) => {
         room.state = state;
         room.phase = 'IN_GAME';
 
-        await roomStore.setRoom(roomCode, room);
-        await broadcastLobby(roomCode);
-        await broadcastStatePerPlayer(roomCode);
+        await roomStore.setRoom(code, room);
+        broadcastLobby(code);
         return;
       }
 
@@ -556,14 +555,14 @@ io.on('connection', (socket) => {
       }
     } catch (e) {
       console.error(e);
-      socket.emit('serverMsg', 'Szerver hiba.');
+      socket.emit('serverMsg', { text: 'Szerver hiba.' });
     }
   });
 
 
+    // Accept both socket.emit('action', type, payload) and socket.emit('action', {type, payload})
     socket.on('action', async (type, payload) => {
-      // Client compatibility: some builds send a single object: { type, payload }
-      if (type && typeof type === 'object' && type.type) {
+      if (type && typeof type === 'object' && typeof type.type === 'string') {
         payload = type.payload;
         type = type.type;
       }
@@ -577,6 +576,12 @@ io.on('connection', (socket) => {
 
       const res = applyAction(rr.state, type, payload);
       let next = res && res.next ? res.next : rr.state;
+
+      // Show step-by-step helper messages (these used to pop up bottom-left)
+      // Only to the acting player (this socket), to avoid spamming others.
+      if (res && res.log) {
+        socket.emit('serverMsg', { text: String(res.log) });
+      }
 
       // Online: same as offline auto-capture, if exists
       if (Engine && typeof Engine.captureIfPossible === 'function') {
@@ -595,10 +600,8 @@ io.on('connection', (socket) => {
       const p = rr.players?.[playerIndex];
       const name = p ? p.name : 'Player';
 
-      const raw = (typeof msg === 'string') ? msg : (msg && (msg.text ?? msg.msg)) || '';
-      const clean = String(raw || '').slice(0, 400);
-      const payload = { name, text: clean, ts: Date.now(), msg: clean, t: Date.now() };
-      io.to(roomCode).emit('chat', payload);
+      const clean = String(msg || '').slice(0, 400);
+      io.to(roomCode).emit('chat', { name, msg: clean, t: Date.now() });
     });
 
     socket.on('disconnect', async () => {

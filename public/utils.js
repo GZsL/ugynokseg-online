@@ -45,6 +45,8 @@ function toast(msg, ms=1800){
       el.style.bottom="20px";
       el.style.zIndex="99999";
       el.style.maxWidth="60vw";
+      // Allow multi-line helper messages from Engine logs
+      el.style.whiteSpace="pre-line";
       el.style.padding="10px 12px";
       el.style.borderRadius="10px";
       el.style.background="rgba(0,0,0,.78)";

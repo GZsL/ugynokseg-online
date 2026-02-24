@@ -96,15 +96,13 @@ function renderChat(){
   const log = document.getElementById('chatLog');
   if(!log) return;
   log.innerHTML = chatState.messages.map(m => {
-    const _ts = (m.ts ?? m.t);
-    const ts = _ts ? new Date(_ts) : null;
+    const ts = m.ts ? new Date(m.ts) : null;
     const t = ts ? ts.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '';
-    if(m.type === 'system' || m.system === true || String(m.name||'').toLowerCase()==='system'){
-      m.text = m.text ?? m.msg;
-      return `<div class="chat-line system">${escapeHtml(t ? `[${t}] ` : '')}${escapeHtml((m.text||m.msg||''))}</div>`;
+    if(m.type === 'system'){
+      return `<div class="chat-line system">${escapeHtml(t ? `[${t}] ` : '')}${escapeHtml(m.text||'')}</div>`;
     }
     const name = m.name || 'Játékos';
-    return `<div class="chat-line"><span class="chat-name">${escapeHtml(name)}:</span> ${escapeHtml((m.text||m.msg||''))} <span style="opacity:.55; font-size:11px;">${escapeHtml(t)}</span></div>`;
+    return `<div class="chat-line"><span class="chat-name">${escapeHtml(name)}:</span> ${escapeHtml(m.text||'')} <span style="opacity:.55; font-size:11px;">${escapeHtml(t)}</span></div>`;
   }).join('');
   log.scrollTop = log.scrollHeight;
 }
@@ -118,7 +116,7 @@ function initChatUI(){
     const text = String(input.value||'').trim();
     if(!text) return;
     if(!socket) return;
-    socket.emit('chat', text);
+    socket.emit('chat', { text });
     input.value = '';
     input.focus();
   };
@@ -153,9 +151,10 @@ function attachSocket(){
     });
 
     socket.on('serverMsg', (t) => {
-      if(typeof toast === "function") toast(String(t));
-      // keep a last status too
-      ui.statusMsg = String(t || "");
+      const msg = (t && typeof t === 'object' && typeof t.text === 'string') ? t.text : String(t||'');
+      if(typeof toast === "function" && msg) toast(msg);
+      // keep a last status too (even if UI doesn't render it)
+      ui.statusMsg = msg;
     });
 
     socket.on('chat', (m) => {
