@@ -595,8 +595,10 @@ io.on('connection', (socket) => {
       const p = rr.players?.[playerIndex];
       const name = p ? p.name : 'Player';
 
-      const clean = String(msg || '').slice(0, 400);
-      io.to(roomCode).emit('chat', { name, msg: clean, t: Date.now() });
+      const raw = (typeof msg === 'string') ? msg : (msg && (msg.text ?? msg.msg)) || '';
+      const clean = String(raw || '').slice(0, 400);
+      const payload = { name, text: clean, ts: Date.now(), msg: clean, t: Date.now() };
+      io.to(roomCode).emit('chat', payload);
     });
 
     socket.on('disconnect', async () => {
