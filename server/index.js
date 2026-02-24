@@ -334,62 +334,52 @@ app.post('/api/join-room', async (req, res) => {
 
 // Email invite (optional)
 app.post('/api/send-invite', async (req, res) => {
-  try{
+  try {
     const b = req.body || {};
-    const to = String(b.to||'').trim();
-    const room = String(b.room||'').trim().toUpperCase();
-    const token = String(b.token||'').trim();
+    const roomCode = String(b.room || '').trim().toUpperCase();
+    const to = String(b.to || '').trim();
 
-    if(!to) return res.status(400).json({ ok:false, error: 'Adj meg email címet.' });
-    if(!room || !token) return res.status(400).json({ ok:false, error: 'Hiányzó szoba vagy token.' });
+    if (!roomCode) return res.status(400).json({ error: 'Hiányzó szobakód.' });
+    if (!to || !to.includes('@')) return res.status(400).json({ error: 'Adj meg érvényes e-mail címet.' });
 
-    // SMTP nincs beállítva? -> ne 500 legyen, hanem normális hiba.
-    const SMTP_HOST = process.env.SMTP_HOST;
-    const SMTP_PORT = process.env.SMTP_PORT;
-    const SMTP_USER = process.env.SMTP_USER;
-    const SMTP_PASS = process.env.SMTP_PASS;
+    const r = await roomStore.getRoom(roomCode);
+    if (!r) return res.status(404).json({ error: 'Szoba nem található.' });
 
-    if(!SMTP_HOST || !SMTP_PORT || !SMTP_USER || !SMTP_PASS){
-      return res.status(400).json({
-        ok:false,
-        error:'E-mail küldés nincs konfigurálva a szerveren (SMTP env hiányzik).'
-      });
+    // SMTP config from env (Render env vars)
+    const host = process.env.SMTP_HOST;
+    const port = Number(process.env.SMTP_PORT || 587);
+    const user = process.env.SMTP_USER;
+    const pass = process.env.SMTP_PASS;
+    const from = process.env.SMTP_FROM || user;
+
+    if (!host || !user || !pass || !from) {
+      return res.status(500).json({ error: 'SMTP nincs beállítva (SMTP_HOST/USER/PASS/FROM).' });
     }
 
-    const nodemailer = require('nodemailer');
     const transporter = nodemailer.createTransport({
-      host: SMTP_HOST,
-      port: Number(SMTP_PORT),
-      secure: Number(SMTP_PORT) === 465,
-      auth: { user: SMTP_USER, pass: SMTP_PASS }
+      host,
+      port,
+      secure: String(process.env.SMTP_SECURE || '').toLowerCase() === 'true',
+      auth: { user, pass },
     });
 
-    const baseUrl = process.env.PUBLIC_BASE_URL || `https://${req.get('host')}`;
-    const link = `${baseUrl}/join.html?room=${encodeURIComponent(room)}`;
-
-    const subject = `Meghívó - Ügynökök (${room})`;
-    const html = `
-      <p>Szia!</p>
-      <p>Meghívtak egy szobába: <b>${room}</b></p>
-      <p>Csatlakozás: <a href="${link}">${link}</a></p>
-      <p>(A lobbyban majd a játékos választ karaktert.)</p>
-    `;
+    const appUrl = process.env.APP_URL || '';
+    const link = `${appUrl}/join.html?room=${encodeURIComponent(roomCode)}`;
 
     await transporter.sendMail({
-      from: process.env.SMTP_FROM || SMTP_USER,
+      from,
       to,
-      subject,
-      html
+      subject: `Meghívó: Ügynökök és Tolvajok (${roomCode})`,
+      text: `Csatlakozz a szobához: ${link}`,
+      html: `<p>Csatlakozz a szobához: <a href="${link}">${link}</a></p>`,
     });
 
-    return res.json({ ok:true });
-  }catch(e){
+    return res.json({ ok: true });
+  } catch (e) {
     console.error(e);
-    return res.status(500).json({ ok:false, error: 'Szerver hiba e-mail küldéskor.' });
+    return res.status(500).json({ error: 'Szerver hiba az e-mail küldésnél.' });
   }
 });
-
-
 
 // -------------------- Socket.IO --------------------
 const server = http.createServer(app);
@@ -510,6 +500,63 @@ io.on('connection', (socket) => {
       await broadcastLobby(roomCode);
       await broadcastStatePerPlayer(roomCode);
     });
+
+  // UI compatibility: lobby.js uses a single 'lobbyAction' event.
+  // Supported: { type: 'TOGGLE_READY' | 'START' | 'LEAVE', ready?: boolean }
+  socket.on('lobbyAction', async (payload = {}) => {
+    try {
+      const type = String(payload.type || '').toUpperCase();
+
+      if (type === 'TOGGLE_READY') {
+        const room = await roomStore.getRoom(code);
+        if (!room) return;
+        const me = room.players && room.players[playerIndex];
+        if (!me) return;
+
+        const nextReady = (payload.ready === undefined) ? !me.ready : !!payload.ready;
+        me.ready = nextReady;
+
+        await roomStore.setRoom(code, room);
+        broadcastLobby(code);
+        return;
+      }
+
+      if (type === 'START') {
+        // only host may start
+        const room = await roomStore.getRoom(code);
+        if (!room) return;
+        const me = room.players && room.players[playerIndex];
+        if (!me || !me.isHost) return;
+
+        // reuse same logic as 'startGame' handler
+        if (room.phase !== 'LOBBY') return;
+        const players = room.players || [];
+        if (players.length < 2) return socket.emit('serverMsg', { text: 'Minimum 2 játékos kell.' });
+        const readyCount = players.filter(p => p && p.ready).length;
+        if (readyCount < 2) return socket.emit('serverMsg', { text: 'Minimum 2 játékos legyen READY.' });
+
+        const configs = players.map(p => ({ name: p.name, characterKey: p.characterKey }));
+        let state = Engine.createGame(configs);
+        state = Engine.startTurn(state).next;
+
+        room.state = state;
+        room.phase = 'IN_GAME';
+
+        await roomStore.setRoom(code, room);
+        broadcastLobby(code);
+        return;
+      }
+
+      if (type === 'LEAVE') {
+        socket.disconnect(true);
+        return;
+      }
+    } catch (e) {
+      console.error(e);
+      socket.emit('serverMsg', { text: 'Szerver hiba.' });
+    }
+  });
+
 
     socket.on('action', async (type, payload) => {
       const rr = await roomStore.getRoom(roomCode);
